@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { getStore } from '@/lib/db';
-import { outreachBlockers } from '@/lib/outreach/build';
+import { reviewOutreach } from '@/lib/outreach/build';
 import { paybackMonths } from '@/lib/estimate/model';
 import { EstimateCard } from '@/components/estimate-card';
 import {
@@ -246,7 +246,7 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
       </div>
 
       {outreach.map((m) => {
-        const blockers = outreachBlockers(m, lead);
+        const review = reviewOutreach(m, lead);
         return (
           <div className="card" key={m.id}>
             <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -261,7 +261,15 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
                 {m.grounding.map((g, i) => <li key={i}>{g}</li>)}
               </ul>
             </details>
-            <OutreachControls leadId={lead.id} messageId={m.id} status={m.status} blockers={blockers} />
+            <OutreachControls
+              leadId={lead.id}
+              messageId={m.id}
+              status={m.status}
+              blockers={review.blockers}
+              warnings={review.warnings}
+              requiresAck={review.requires_explicit_ack}
+              marketNote={review.market.outreach_note}
+            />
           </div>
         );
       })}

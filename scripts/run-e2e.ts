@@ -19,6 +19,7 @@ import { rollupClient } from '@/lib/metrics/rollup';
 import { getStore } from '@/lib/db';
 import { fixtureFetcher } from '@/lib/scrape/fixture-fetcher';
 import { paybackMonths } from '@/lib/estimate/model';
+import { getMarket } from '@/lib/discovery/markets';
 
 // The e2e run gets its own data file so it never touches the working store.
 process.env.DATA_FILE = join(process.cwd(), '.data', 'e2e.json');
@@ -153,9 +154,26 @@ async function runCase(c: Case) {
     [...emails, ...dms].flatMap((m) => outreachBlockers(m, lead)).join(' | '));
 
   const store = await getStore();
+
+  // On a high-risk market (DE/AT/DK) approval must be refused until the
+  // operator acknowledges the regime. Check that before approving.
+  const market = getMarket(lead.country);
+  if (market.outreach_risk === 'high') {
+    let gated = false;
+    try {
+      await approveOutreachForLead(lead.id, emails[0].id);
+    } catch {
+      gated = true;
+    }
+    check(`${market.name}: approval REFUSED without acknowledging the market regime`, gated);
+  }
+
   // Approval is a deliberate human act; sending is a second one.
-  const approved = await approveOutreachForLead(lead.id, emails[0].id);
+  const approved = await approveOutreachForLead(lead.id, emails[0].id, {
+    acknowledgeMarketRisk: market.outreach_risk === 'high',
+  });
   check('approval moves draft -> approved', approved.status === 'approved');
+  check('approval never sends anything', approved.sent_at === null);
 
   // An ungrounded message must be refusable even if someone tries.
   const bad = await store.insertOutreach({
@@ -165,11 +183,11 @@ async function runCase(c: Case) {
   });
   let refused = false;
   try {
-    await approveOutreachForLead(lead.id, bad.id);
+    await approveOutreachForLead(lead.id, bad.id, { acknowledgeMarketRisk: true });
   } catch {
     refused = true;
   }
-  check('generic ungrounded message is REFUSED at approval', refused);
+  check('generic ungrounded message is REFUSED even with the market acknowledged', refused);
 
   await store.setLeadStage(lead.id, 'contacted');
 

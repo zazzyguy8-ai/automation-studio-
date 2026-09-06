@@ -73,20 +73,38 @@ export function BuildOutreachButtons({ leadId, hasDemo }: { leadId: string; hasD
 }
 
 export function OutreachControls({
-  leadId, messageId, status, blockers,
+  leadId, messageId, status, blockers, warnings = [], requiresAck = false, marketNote = '',
 }: {
   leadId: string; messageId: string; status: string; blockers: string[];
+  warnings?: string[]; requiresAck?: boolean; marketNote?: string;
 }) {
   const { busy, error, run } = useAction();
+  const [ack, setAck] = useState(false);
   return (
     <>
+      {warnings.length > 0 && status === 'draft' && (
+        <div className={`banner ${requiresAck ? 'bad' : 'warn'}`} style={{ marginTop: 8 }}>
+          <strong>Skontroluj pred schválením</strong>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {warnings.map((w, i) => <li key={i} className="small">{w}</li>)}
+          </ul>
+          {requiresAck && (
+            <label className="row small" style={{ gap: 6, marginTop: 10 }}>
+              <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+              Rozumiem riziku na tomto trhu a beriem zodpovednosť za odoslanie.
+            </label>
+          )}
+        </div>
+      )}
       <div className="row" style={{ marginTop: 8 }}>
         {status === 'draft' && (
           <button
             className="primary"
-            disabled={busy || blockers.length > 0}
-            title={blockers.join(' | ')}
-            onClick={() => run(() => post(`/api/outreach/${messageId}`, { lead_id: leadId, action: 'approve' }))}
+            disabled={busy || blockers.length > 0 || (requiresAck && !ack)}
+            title={requiresAck && !ack ? marketNote : blockers.join(' | ')}
+            onClick={() => run(() => post(`/api/outreach/${messageId}`, {
+              lead_id: leadId, action: 'approve', acknowledge_market_risk: ack,
+            }))}
           >
             Approve
           </button>

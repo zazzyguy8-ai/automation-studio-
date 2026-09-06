@@ -1,0 +1,4 @@
+{"places":[
+{"id":"ChIJplace001","displayName":{"text":"Northgate Auto Repairs"},"formattedAddress":"12 Northgate Road, Manchester M3 1AB, UK","websiteUri":"https://northgate-auto.example","internationalPhoneNumber":"+44 161 496 0111","primaryType":"car_repair","addressComponents":[{"longText":"Manchester","types":["postal_town"]}]},
+{"id":"ChIJplace002","displayName":{"text":"Deansgate Service Centre"},"formattedAddress":"5 Deansgate, Manchester M3 2FF, UK","primaryType":"car_repair","addressComponents":[{"longText":"Manchester","types":["postal_town"]}]}
+]}

@@ -7,7 +7,7 @@ import { approveOutreachForLead } from '@/lib/outreach/build';
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await ctx.params;
-    const { lead_id, action } = await req.json();
+    const { lead_id, action, acknowledge_market_risk } = await req.json();
     const store = await getStore();
     if (action === 'reject') return NextResponse.json(await store.setOutreachStatus(id, 'rejected'));
     if (action === 'mark_sent') {
@@ -17,7 +17,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       }
       return NextResponse.json(await store.setOutreachStatus(id, 'sent'));
     }
-    return NextResponse.json(await approveOutreachForLead(lead_id, id));
+    return NextResponse.json(await approveOutreachForLead(lead_id, id, {
+      acknowledgeMarketRisk: Boolean(acknowledge_market_risk),
+    }));
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
   }

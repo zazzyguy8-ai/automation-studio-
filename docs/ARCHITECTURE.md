@@ -79,6 +79,39 @@ load-bearing:
 - `{ ok: true, ... }` — carries a `persisted` block of every stored id, which
   `verifyPersisted()` reads back. The CLI prints it; the tests assert on it.
 
+## Lead discovery
+
+`src/lib/discovery/` turns "industry + country/city" into verified leads.
+Providers sit behind one interface, same as the reasoning layer:
+
+- **Overpass (OpenStreetMap)** — default. Worldwide, no key, and every record
+  has a public URL. Coverage is strongest in DACH and Nordics, good in the UK,
+  patchy in the US.
+- **Google Places (New)** — used when `GOOGLE_PLACES_API_KEY` exists. Better US
+  coverage; costs money, so it is opt-in rather than default.
+
+Three decisions carry the weight:
+
+**Contacts are never derived.** There is no code path that constructs
+`info@<domain>`. A contact exists only if it was read from somewhere, and it
+carries the URL where it appears. `verify.ts` fetches the company's own site
+and promotes a directory contact to `found_on_site` only when it actually
+appears there; otherwise it stays the weaker claim and the UI says so.
+
+**Industry matching handles compound languages.** German and Nordic languages
+glue words together ("Immobilienmakler", "Steuerberatungskanzlei"), so matching
+allows in-word matches for aliases of five characters or more, and the longest
+match wins rather than the first category in the array. A loose `includes` was
+tried first and mapped "interpretive dance studio" onto fitness — a silent
+category error means an entire list of irrelevant companies.
+
+**Market regime is data, not prose.** `markets.ts` carries risk level, language,
+required message elements and the reason per country. `reviewOutreach()` folds
+that into the approval decision, and `approveOutreachForLead()` refuses a
+high-risk market without an explicit acknowledgement flag that only the UI
+checkbox sets. That is why the same draft behaves differently for a British and
+a German lead.
+
 ## Where the quality actually comes from
 
 Three components do the work that stops this being a generic AI wrapper:
@@ -143,9 +176,6 @@ critical path from URL to signed client:
 - **Sending.** Outreach is drafted and approved here; you send it from your own
   inbox. Adding a sender means deliverability, warmup and suppression lists —
   a project of its own, and worth doing only once outreach is converting.
-- **Lead search / scraping directories.** The brief asks for search by industry
-  and country. Import by CSV and audit-by-URL are in; automated discovery is not,
-  because the audit is the part that wins deals.
 - **Live execution ingestion.** `executions` is written by the seed script today.
   The real path is an n8n HTTP node posting to this API at the end of each run —
   a small endpoint, once you have a live client to point at it.

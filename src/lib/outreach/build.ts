@@ -1,5 +1,6 @@
 import { getStore } from '@/lib/db';
 import { getProvider } from '@/lib/llm';
+import { getMarket, type Market } from '@/lib/discovery/markets';
 import type { Audit, Channel, Demo, Lead, OutreachMessage } from '@/lib/types';
 
 export interface Sender {
@@ -13,6 +14,52 @@ export function senderFromEnv(): Sender {
     name: process.env.SENDER_NAME ?? 'Richard',
     company: process.env.SENDER_COMPANY ?? 'Automation Studio',
     calendar_url: process.env.SENDER_CALENDAR_URL ?? 'https://cal.com/your-handle/15min',
+  };
+}
+
+/** Non-blocking things the operator must see before approving. */
+export interface OutreachReview {
+  blockers: string[];
+  warnings: string[];
+  market: Market;
+  /** True when the market's regime means approval needs a deliberate decision. */
+  requires_explicit_ack: boolean;
+}
+
+/**
+ * Everything the operator needs in order to decide, in one place.
+ *
+ * Blockers stop approval outright. Warnings do not - they are judgement calls
+ * that belong to the operator, not to the software. The market note is the one
+ * that matters most: a cold email that is routine in the UK is a legal problem
+ * in Germany, and the same draft would otherwise sail through both.
+ */
+export function reviewOutreach(message: OutreachMessage, lead: Lead): OutreachReview {
+  const market = getMarket(lead.country);
+  const warnings: string[] = [];
+
+  if (market.outreach_risk !== 'low') {
+    warnings.push(`${market.name}: ${market.outreach_note}`);
+  }
+  for (const required of market.required_in_message) {
+    warnings.push(`Pred odoslaním skontroluj, že správa obsahuje: ${required}.`);
+  }
+
+  // An email draft is useless without an address that actually exists.
+  if (message.channel === 'email') {
+    const emails = lead.contacts.filter((c) => c.kind === 'email');
+    if (emails.length === 0) {
+      warnings.push('Na tento lead nemáme overenú emailovú adresu - draft nemáš kam poslať.');
+    } else if (!emails.some((c) => c.label === 'found_on_site')) {
+      warnings.push('Emailová adresa pochádza z adresára a nie je potvrdená na webe firmy.');
+    }
+  }
+
+  return {
+    blockers: outreachBlockers(message, lead),
+    warnings,
+    market,
+    requires_explicit_ack: market.outreach_risk === 'high',
   };
 }
 
@@ -79,17 +126,34 @@ export async function buildOutreachSequence(
   return out;
 }
 
-/** Approval is the only path to 'approved', and it enforces the blockers. */
-export async function approveOutreachForLead(leadId: string, messageId: string): Promise<OutreachMessage> {
+/**
+ * Approval is the only path to 'approved', and it is always a human act.
+ *
+ * On a high-risk market the caller must pass `acknowledgeMarketRisk: true`,
+ * which the UI only sets when the operator has ticked the box next to the
+ * market note. It is deliberately impossible to approve a German cold email
+ * without having been shown why that is riskier than a British one.
+ */
+export async function approveOutreachForLead(
+  leadId: string,
+  messageId: string,
+  options: { acknowledgeMarketRisk?: boolean } = {},
+): Promise<OutreachMessage> {
   const store = await getStore();
   const lead = await store.getLead(leadId);
   if (!lead) throw new Error(`lead ${leadId} not found`);
   const message = (await store.listOutreach(leadId)).find((m) => m.id === messageId);
   if (!message) throw new Error(`message ${messageId} not found for lead ${leadId}`);
 
-  const blockers = outreachBlockers(message, lead);
-  if (blockers.length > 0) {
-    throw new Error(`cannot approve: ${blockers.join(' | ')}`);
+  const review = reviewOutreach(message, lead);
+  if (review.blockers.length > 0) {
+    throw new Error(`cannot approve: ${review.blockers.join(' | ')}`);
+  }
+  if (review.requires_explicit_ack && !options.acknowledgeMarketRisk) {
+    throw new Error(
+      `cannot approve: ${review.market.name} je vysokorizikový trh pre cold outreach. `
+      + `${review.market.outreach_note} Potvrď to vedome, ak chceš pokračovať.`,
+    );
   }
   return store.setOutreachStatus(messageId, 'approved');
 }

@@ -50,6 +50,62 @@ Never paste a key into a chat, a commit, or a code comment. If one is ever
 exposed, rotate it at console.anthropic.com — the old one keeps working until
 you do.
 
+## Lead discovery (global, priority UK / US / DACH / Nordics)
+
+Industry + country/city in, verified companies out:
+
+```bash
+npm run discover -- --industry "car repair" --country GB --city Manchester
+npm run discover -- --industry Zahnarzt --country DE --city Munich --limit 10
+npm run discover -- --industry "car repair" --country GB --city Manchester --offline
+```
+
+**Sources.** OpenStreetMap (Nominatim + Overpass) is the default: worldwide, no
+API key, and every record has a public URL you can open and check. Set
+`GOOGLE_PLACES_API_KEY` and Places is used instead — better coverage in the US
+and UK, at the cost of a card and Google's terms. Pick explicitly with
+`--provider overpass|google_places`.
+
+**Industry matching is multilingual.** `car repair`, `autoservis`,
+`Autowerkstatt`, `bilverkstad` and `Immobilienmakler` all resolve, including
+German and Nordic compound words — otherwise the priority markets would only
+work in English.
+
+**Nothing is asserted without a source.** Every company carries the URL it came
+from. Contacts are never guessed — there is no `info@domain.com` construction
+anywhere in the codebase. A contact is either found on the company's own site
+(`found_on_site`, with the page it appears on) or listed in the directory
+(`from_directory`, a weaker claim the UI labels as such). Companies whose site
+cannot be read are not saved, and the reason is shown.
+
+### Market regimes differ, and the system knows it
+
+Cold email that is routine in the UK is a legal problem in Germany. Each market
+carries its own risk level, note and required message elements:
+
+| Market | Risk | Why |
+|---|---|---|
+| GB, US, IE | low | PECR / CAN-SPAM permit B2B with a working opt-out |
+| CH, SE, NO, FI, NL | medium | permitted in practice, tighter conditions |
+| **DE, AT, DK** | **high** | prior consent required even B2B (UWG §7, TKG §174, Markedsføringsloven §10) |
+| unmapped | high | conservative default until you check |
+
+On a high-risk market, approval is **refused** unless you tick the box
+acknowledging the regime. The note is shown next to the button, so it is
+impossible to approve a German cold email without having read why it is riskier
+than a British one.
+
+This is an operational signal, not legal advice. For DE/AT/DK the safer routes
+are usually the phone, the company's own contact form, or LinkedIn.
+
+### Approval is always yours
+
+Discovery only fills the pipeline at stage `new`. Audits, demos and drafts are
+separate, deliberate steps. Nothing is ever sent by this system: you approve a
+draft, send it yourself, then mark it sent. Approval stays blocked on messages
+with no grounding, that never name the company, or that open with a template
+line — market acknowledgement does not override those.
+
 ## The web UI
 
 ```bash
@@ -58,6 +114,7 @@ npm run dev                    # http://localhost:3000
 ```
 
 - **Run an audit** — paste a URL, get the audit.
+- **Nájsť firmy** (`/discover`) — industry + country/city, with every source URL shown.
 - **Leads** — the pipeline: New → Audited → Contacted → Replied → Call → Proposal → Won/Lost.
 - **Lead detail** — the whole sales artefact on one page: enrichment, problems
   with quotes, scored options, the recommended workflow, Before/After, the demo
@@ -129,6 +186,8 @@ visible rather than silently degraded.
 | `npm run dev` | Web UI |
 | `npm run pipeline -- <url>` | URL → full proposal in the terminal |
 | `npm run pipeline -- --fixture <name>` | Offline demo run |
+| `npm run discover -- --industry X --country GB` | Find and verify companies |
+| `npm run test:discovery` | Discovery: taxonomy, markets, providers, verification, approval |
 | `npm run seed` | Populate the local store |
 | `npm test` | Typecheck + all three suites |
 | `npm run test:pipeline` | Pipeline: args, provider, full run, persistence, failures |
