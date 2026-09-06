@@ -11,8 +11,9 @@ export const FIXTURES: Record<string, FixtureSite> = {
   'karoseria-hronec': { url: 'https://karoseria-hronec.sk', industry: 'auto body repair', country: 'SK' },
   'praxis-lindner': { url: 'https://lindner-dental.at', industry: 'dental clinic', country: 'AT' },
   'novak-reality': { url: 'https://novakreality.cz', industry: 'real estate agency', country: 'CZ' },
-  // Rovnaká firma, akú vracia discovery fixture - dá sa tak prejsť celý
-  // reťazec discovery -> audit offline, vrátane trhu s iným režimom outreachu.
+  // The same company the discovery fixture returns, so the whole
+  // discovery -> audit chain can be walked offline, on a market with a
+  // different outreach regime.
   'northgate-auto': { url: 'https://northgate-auto.example', industry: 'car repair', country: 'GB' },
 };
 

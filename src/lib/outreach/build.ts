@@ -42,16 +42,16 @@ export function reviewOutreach(message: OutreachMessage, lead: Lead): OutreachRe
     warnings.push(`${market.name}: ${market.outreach_note}`);
   }
   for (const required of market.required_in_message) {
-    warnings.push(`Pred odoslaním skontroluj, že správa obsahuje: ${required}.`);
+    warnings.push(`Before sending, check the message contains: ${required}.`);
   }
 
   // An email draft is useless without an address that actually exists.
   if (message.channel === 'email') {
     const emails = lead.contacts.filter((c) => c.kind === 'email');
     if (emails.length === 0) {
-      warnings.push('Na tento lead nemáme overenú emailovú adresu - draft nemáš kam poslať.');
+      warnings.push('No verified email address on this lead - there is nowhere to send the draft.');
     } else if (!emails.some((c) => c.label === 'found_on_site')) {
-      warnings.push('Emailová adresa pochádza z adresára a nie je potvrdená na webe firmy.');
+      warnings.push('The email address comes from a directory and is not confirmed on the company site.');
     }
   }
 
@@ -151,8 +151,8 @@ export async function approveOutreachForLead(
   }
   if (review.requires_explicit_ack && !options.acknowledgeMarketRisk) {
     throw new Error(
-      `cannot approve: ${review.market.name} je vysokorizikový trh pre cold outreach. `
-      + `${review.market.outreach_note} Potvrď to vedome, ak chceš pokračovať.`,
+      `cannot approve: ${review.market.name} is a high-risk market for cold outreach. `
+      + `${review.market.outreach_note} Acknowledge this deliberately if you want to proceed.`,
     );
   }
   return store.setOutreachStatus(messageId, 'approved');

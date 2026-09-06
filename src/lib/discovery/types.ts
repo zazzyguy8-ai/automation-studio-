@@ -1,29 +1,29 @@
 import { z } from 'zod';
 
-/** Odkaz na zdroj. Každé tvrdenie o firme musí niesť takýto odkaz -
- *  bez neho sa údaj do CRM nedostane. */
+/** A source reference. Every claim about a company must carry one -
+ *  without it the value never reaches the CRM. */
 export const SourceRefSchema = z.object({
-  /** Ktorý provider to našiel: 'overpass', 'google_places', 'import', 'website'. */
+  /** Which provider found it: 'overpass', 'google_places', 'import', 'website'. */
   provider: z.string(),
-  /** Verejne overiteľná URL, kde sa dá záznam skontrolovať. */
+  /** Publicly checkable URL where the record can be verified. */
   source_url: z.string(),
-  /** Identifikátor v zdroji (napr. OSM node/12345, Places place_id). */
+  /** Identifier within the source (e.g. OSM node/12345, Places place_id). */
   source_id: z.string().nullable(),
-  /** Ktoré polia pochádzajú práve z tohto zdroja. */
+  /** Which fields came from this particular source. */
   fields: z.array(z.string()),
   fetched_at: z.string(),
 });
 export type SourceRef = z.infer<typeof SourceRefSchema>;
 
 /**
- * Ako bol kontakt overený.
+ * How a contact was verified.
  *
- *  found_on_site  - našli sme ho na vlastnom webe firmy (najsilnejší dôkaz)
- *  from_directory - uvedený v adresári (OSM/Places), na webe zatiaľ nepotvrdený
- *  unverified     - nepotvrdený; nikdy sa nepoužije v outreachi
+ *  found_on_site  - read from the company's own website (strongest evidence)
+ *  from_directory - listed in a directory (OSM/Places), unconfirmed on the site
+ *  unverified     - unconfirmed; never used in outreach
  *
- * Kontakt sa NIKDY neodvodzuje (žiadne "asi info@domena.sk"). Buď je
- * niekde napísaný, alebo neexistuje.
+ * A contact is NEVER derived (no "presumably info@domain.com"). Either it is
+ * written down somewhere, or it does not exist.
  */
 export const ContactVerificationSchema = z.enum(['found_on_site', 'from_directory', 'unverified']);
 export type ContactVerification = z.infer<typeof ContactVerificationSchema>;
@@ -32,7 +32,7 @@ export const VerifiedContactSchema = z.object({
   kind: z.enum(['email', 'phone', 'form', 'whatsapp', 'other']),
   value: z.string(),
   verification: ContactVerificationSchema,
-  /** URL, na ktorej kontakt reálne stojí. */
+  /** URL where the contact actually appears. */
   evidence_url: z.string().nullable(),
   checked_at: z.string(),
 });
@@ -41,47 +41,47 @@ export type VerifiedContact = z.infer<typeof VerifiedContactSchema>;
 export const DiscoveredCompanySchema = z.object({
   name: z.string(),
   website: z.string().nullable(),
-  /** Presne ako to uvádza zdroj - neprekladáme ani neupravujeme. */
+  /** Exactly as the source states it - not translated or reformatted. */
   address: z.string().nullable(),
   city: z.string().nullable(),
   country: z.string().nullable(),
-  /** Kategória zo zdroja (OSM tag, Places type), nie náš odhad. */
+  /** Category from the source (OSM tag, Places type), not our guess. */
   category: z.string().nullable(),
   contacts: z.array(VerifiedContactSchema),
   sources: z.array(SourceRefSchema).min(1),
-  /** Prečo si myslíme, že je to relevantné pre zadaný dopyt. */
+  /** Why we believe this matches the query. */
   match_reason: z.string(),
 });
 export type DiscoveredCompany = z.infer<typeof DiscoveredCompanySchema>;
 
 export interface DiscoveryQuery {
-  /** Voľný text, napr. "autoservis", "dental clinic", "roofing contractor". */
+  /** Free text, e.g. "autoservis", "dental clinic", "roofing contractor". */
   industry: string;
-  /** ISO kód krajiny, napr. GB, US, DE, SE. */
+  /** ISO country code, e.g. GB, US, DE, SE. */
   country: string;
-  /** Nepovinné mesto; bez neho hľadáme v rámci krajiny. */
+  /** Optional city; without it we search the whole country. */
   city?: string | null;
   limit?: number;
-  /** Preskočiť firmy bez webu - bez webu nevieme urobiť audit. */
+  /** Skip companies with no website - without one we cannot audit them. */
   requireWebsite?: boolean;
 }
 
 export interface DiscoveryResult {
   companies: DiscoveredCompany[];
-  /** Čo sa reálne pýtalo, aby sa dal výsledok zreprodukovať. */
+  /** What was actually asked, so the result can be reproduced. */
   query_echo: {
     provider: string;
     industry: string;
     resolved_area: string;
     raw_query: string;
   };
-  /** Dôvody, prečo bol niektorý záznam zahodený - viditeľné, nie tiché. */
+  /** Why a record was dropped - visible, not silent. */
   skipped: Array<{ name: string; reason: string }>;
 }
 
 export interface DiscoveryProvider {
   readonly name: string;
-  /** Či je provider použiteľný (napr. má kľúč). */
+  /** Whether the provider is usable (e.g. has a key). */
   available(): boolean;
   search(query: DiscoveryQuery): Promise<DiscoveryResult>;
 }

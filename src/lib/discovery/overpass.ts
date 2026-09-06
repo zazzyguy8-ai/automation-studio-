@@ -2,15 +2,15 @@ import { resolveIndustry } from './taxonomy';
 import type { DiscoveryProvider, DiscoveryQuery, DiscoveryResult, DiscoveredCompany, VerifiedContact } from './types';
 
 /**
- * Discovery cez OpenStreetMap (Nominatim na oblasť + Overpass na firmy).
+ * Discovery via OpenStreetMap (Nominatim for the area, Overpass for companies).
  *
- * Prečo toto ako default: pokrýva celý svet, nepotrebuje API kľúč ani kartu,
- * a každý záznam má verejnú URL, na ktorej si ho vieš overiť. To je presne to,
- * čo potrebujeme pre pravidlo "žiadne tvrdenie bez zdroja".
+ * Why this is the default: worldwide coverage, no API key or card, and every
+ * record has a public URL you can open and check. That is exactly what the
+ * "no claim without a source" rule needs.
  *
- * Obmedzenie, ktoré treba poznať: OSM je komunitné dáta. Pokrytie je výborné v
- * DACH a Nordics, dobré v UK, nerovnomerné v USA (tam sa oplatí Google Places).
- * Chýbajúca firma v OSM neznamená, že neexistuje.
+ * The limitation to know: OSM is community data. Coverage is excellent in DACH
+ * and the Nordics, good in the UK, uneven in the US (where Google Places earns
+ * its cost). A company missing from OSM does not mean it does not exist.
  */
 
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
@@ -23,12 +23,12 @@ interface OverpassElement {
 }
 
 export interface OverpassOptions {
-  /** Injektovateľný transport - testy a offline beh. */
+  /** Injectable transport - tests and offline runs. */
   fetch?: typeof fetch;
   userAgent?: string;
 }
 
-/** OSM vyžaduje identifikovateľného klienta; anonymné volania blokuje. */
+/** OSM requires an identifiable client; anonymous calls are blocked. */
 function agent(opts: OverpassOptions): string {
   return opts.userAgent
     ?? process.env.CRAWL_USER_AGENT
@@ -49,23 +49,23 @@ export class OverpassProvider implements DiscoveryProvider {
     return true;
   }
 
-  /** Mesto/krajina -> OSM area id, ktoré Overpass vie použiť. */
+  /** City/country -> an OSM area id Overpass can use. */
   private async resolveArea(query: DiscoveryQuery): Promise<{ areaId: number; label: string }> {
     const q = query.city ? `${query.city}, ${query.country}` : query.country;
     const url = `${NOMINATIM}?q=${encodeURIComponent(q)}&format=json&limit=1&addressdetails=0`;
     const res = await this.fetchImpl(url, {
       headers: { 'user-agent': agent(this.opts), accept: 'application/json' },
     });
-    if (!res.ok) throw new Error(`Nominatim vrátil HTTP ${res.status} pre "${q}"`);
+    if (!res.ok) throw new Error(`Nominatim returned HTTP ${res.status} for "${q}"`);
 
     const rows = (await res.json()) as Array<{ osm_id: number; osm_type: string; display_name: string }>;
-    if (rows.length === 0) throw new Error(`Nepodarilo sa nájsť oblasť "${q}"`);
+    if (rows.length === 0) throw new Error(`Could not resolve the area "${q}"`);
 
     const hit = rows[0];
-    // Overpass area id: relácia + 3600000000, cesta + 2400000000.
+    // Overpass area id: relation + 3600000000, way + 2400000000.
     const offset = hit.osm_type === 'relation' ? 3_600_000_000 : 2_400_000_000;
     if (hit.osm_type === 'node') {
-      throw new Error(`"${q}" sa mapuje na bod, nie na oblasť - skús väčšie mesto alebo región`);
+      throw new Error(`"${q}" maps to a point, not an area - try a larger city or region`);
     }
     return { areaId: hit.osm_id + offset, label: hit.display_name };
   }
@@ -89,7 +89,7 @@ out tags center ${limit};`;
     const category = resolveIndustry(query.industry);
     if (!category) {
       throw new Error(
-        `Odvetvie "${query.industry}" nepoznám. Použi jeden z: `
+        `Unknown industry "${query.industry}". Use one of: `
         + `${INDUSTRY_HINT}`,
       );
     }
@@ -103,7 +103,7 @@ out tags center ${limit};`;
       headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': agent(this.opts) },
       body: `data=${encodeURIComponent(raw)}`,
     });
-    if (!res.ok) throw new Error(`Overpass vrátil HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`Overpass returned HTTP ${res.status}`);
 
     const body = (await res.json()) as { elements?: OverpassElement[] };
     const fetched_at = new Date().toISOString();
@@ -117,14 +117,14 @@ out tags center ${limit};`;
 
       const website = normalizeWebsite(tags.website ?? tags['contact:website'] ?? tags.url);
       if (query.requireWebsite !== false && !website) {
-        skipped.push({ name, reason: 'v OSM nemá uvedený web - bez webu sa nedá urobiť audit' });
+        skipped.push({ name, reason: 'no website in OSM - without one there is nothing to audit' });
         continue;
       }
 
       const source_url = `https://www.openstreetmap.org/${el.type}/${el.id}`;
       const contacts: VerifiedContact[] = [];
 
-      // Kontakty z adresára sú `from_directory` - overia sa až proti webu firmy.
+      // Directory contacts are `from_directory` until checked against the site.
       const phone = tags.phone ?? tags['contact:phone'];
       if (phone) {
         contacts.push({
@@ -161,7 +161,7 @@ out tags center ${limit};`;
           fields: ['name', ...(website ? ['website'] : []), ...(phone ? ['phone'] : []), ...(email ? ['email'] : [])],
           fetched_at,
         }],
-        match_reason: `OSM ${matchedTag ?? 'tag'} v oblasti ${area.label}`,
+        match_reason: `OSM ${matchedTag ?? 'tag'} within ${area.label}`,
       });
 
       if (companies.length >= limit) break;
@@ -175,10 +175,10 @@ out tags center ${limit};`;
   }
 }
 
-const INDUSTRY_HINT = 'autoservis, zubná klinika, klinika, realitka, stavebná firma, advokát, '
-  + 'účtovníctvo, salón, fitness, veterina, hotel/reštaurácia, agentúra';
+const INDUSTRY_HINT = 'car repair, dental clinic, clinic, estate agency, construction, law firm, '
+  + 'accounting, salon, fitness, veterinary, hotel/restaurant, agency';
 
-/** Adresáre uvádzajú weby nekonzistentne; zjednotíme, inak nič neupravujeme. */
+/** Directories list websites inconsistently; normalise, change nothing else. */
 export function normalizeWebsite(raw: string | undefined): string | null {
   if (!raw) return null;
   const first = raw.split(/[;,\s]+/)[0]?.trim();
@@ -186,7 +186,7 @@ export function normalizeWebsite(raw: string | undefined): string | null {
   try {
     const url = new URL(/^https?:\/\//i.test(first) ? first : `https://${first}`);
     if (!url.hostname.includes('.')) return null;
-    // Odkaz na sociálnu sieť nie je firemný web - audit by nemal čo čítať.
+    // A social profile is not a company website - the audit would have nothing to read.
     if (/facebook\.com|instagram\.com|linkedin\.com|twitter\.com|x\.com/i.test(url.hostname)) return null;
     return `${url.origin}${url.pathname === '/' ? '' : url.pathname}`;
   } catch {

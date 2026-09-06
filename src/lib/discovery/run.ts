@@ -9,22 +9,22 @@ import type { DiscoveryProvider, DiscoveryQuery, DiscoveryResult } from './types
 import { readyForAudit, verifyCompany, type VerifiedCompany } from './verify';
 
 export interface DiscoveryOptions {
-  /** 'auto' uprednostní Places, keď je kľúč, inak OSM. */
+  /** 'auto' prefers Places when a key exists, otherwise OSM. */
   provider?: 'auto' | 'overpass' | 'google_places';
-  /** Injektovateľné transporty pre testy a offline beh. */
+  /** Injectable transports for tests and offline runs. */
   searchFetch?: typeof fetch;
   siteFetcher?: Fetcher;
-  /** Overiť weby nájdených firiem (pomalšie, ale bez toho nemáš dôkazy). */
+  /** Verify the sites of found companies (slower, but without it you have no evidence). */
   verify?: boolean;
 }
 
 export interface DiscoveredLead {
   company: VerifiedCompany;
   market: Market;
-  /** Uložený lead, keď firma prešla až do CRM. */
+  /** The stored lead, when the company made it into the CRM. */
   lead: Lead | null;
   ready_for_audit: boolean;
-  /** Prečo sa firma neuložila, ak sa neuložila. */
+  /** Why the company was not saved, when it was not. */
   rejected_reason: string | null;
 }
 
@@ -54,10 +54,10 @@ export function pickProvider(opts: DiscoveryOptions = {}): DiscoveryProvider {
 }
 
 /**
- * Odvetvie + krajina/mesto -> overené firmy -> leady v CRM.
+ * Industry + country/city -> verified companies -> leads in the CRM.
  *
- * Nič sa neodosiela. Discovery iba plní pipeline v stave `new`; audit, demo a
- * outreach sú samostatné kroky, ktoré spúšťaš vedome.
+ * Nothing is sent. Discovery only fills the pipeline at stage `new`; the audit,
+ * the demo and the outreach are separate steps you trigger deliberately.
  */
 export async function runDiscovery(
   query: DiscoveryQuery,
@@ -65,12 +65,12 @@ export async function runDiscovery(
 ): Promise<DiscoveryRun> {
   if (!resolveIndustry(query.industry)) {
     throw new Error(
-      `Odvetvie "${query.industry}" nepoznám. Podporované: `
+      `Unknown industry "${query.industry}". Supported: `
       + industryOptions().map((i) => i.label).join(', '),
     );
   }
   if (!query.country || query.country.trim().length < 2) {
-    throw new Error('Krajina je povinná (ISO kód, napr. GB, US, DE, SE)');
+    throw new Error('Country is required (ISO code, e.g. GB, US, DE, SE)');
   }
 
   const provider = pickProvider(opts);
@@ -85,7 +85,7 @@ export async function runDiscovery(
       ? {
           ...company,
           verification: {
-            website_reachable: false, website_error: 'overenie preskočené',
+            website_reachable: false, website_error: 'verification skipped',
             pages_read: 0, name_matches_site: false, checked_at: new Date().toISOString(),
           },
         }
@@ -96,19 +96,19 @@ export async function runDiscovery(
     if (!verified.website) {
       results.push({
         company: verified, market, lead: null, ready_for_audit: false,
-        rejected_reason: 'bez webu sa nedá urobiť audit',
+        rejected_reason: 'no website, so there is nothing to audit',
       });
       continue;
     }
     if (opts.verify !== false && !ready) {
       results.push({
         company: verified, market, lead: null, ready_for_audit: false,
-        rejected_reason: `web nedostupný: ${verified.verification.website_error}`,
+        rejected_reason: `website unreachable: ${verified.verification.website_error}`,
       });
       continue;
     }
 
-    // Do CRM idú len kontakty s dôkazom. Neoverené sa zahadzujú, nie ukladajú.
+    // Only contacts with evidence reach the CRM. Unverified ones are dropped, not stored.
     const contacts: Contact[] = verified.contacts
       .filter((c) => c.verification !== 'unverified')
       .map((c) => ({
@@ -128,12 +128,12 @@ export async function runDiscovery(
       contacts,
       socials: [],
       notes: [
-        `Nájdené cez ${provider.name}: ${verified.match_reason}.`,
-        `Zdroje: ${verified.sources.map((s) => s.source_url).join(' | ')}`,
+        `Found via ${provider.name}: ${verified.match_reason}.`,
+        `Sources: ${verified.sources.map((s) => s.source_url).join(' | ')}`,
         verified.verification.name_matches_site
-          ? 'Názov firmy potvrdený na jej vlastnom webe.'
-          : 'POZOR: názov firmy sa na uvedenom webe nepodarilo potvrdiť - over, či web patrí jej.',
-        `Trh ${market.name}: outreach riziko ${market.outreach_risk}.`,
+          ? 'Company name confirmed on its own website.'
+          : 'WARNING: the company name could not be confirmed on that website - check it really is theirs.',
+        `Market ${market.name}: outreach risk ${market.outreach_risk}.`,
       ].join('\n'),
       source: `discovery:${provider.name}`,
     });

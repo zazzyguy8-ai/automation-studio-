@@ -84,14 +84,14 @@ export function OutreachControls({
     <>
       {warnings.length > 0 && status === 'draft' && (
         <div className={`banner ${requiresAck ? 'bad' : 'warn'}`} style={{ marginTop: 8 }}>
-          <strong>Skontroluj pred schválením</strong>
+          <strong>Check before approving</strong>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
             {warnings.map((w, i) => <li key={i} className="small">{w}</li>)}
           </ul>
           {requiresAck && (
             <label className="row small" style={{ gap: 6, marginTop: 10 }}>
               <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-              Rozumiem riziku na tomto trhu a beriem zodpovednosť za odoslanie.
+              I understand the risk on this market and take responsibility for sending.
             </label>
           )}
         </div>

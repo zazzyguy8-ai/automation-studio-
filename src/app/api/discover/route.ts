@@ -8,7 +8,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     if (!body.industry || !body.country) {
-      return NextResponse.json({ error: 'industry a country sú povinné' }, { status: 400 });
+      return NextResponse.json({ error: 'industry and country are required' }, { status: 400 });
     }
     const offline = Boolean(body.offline);
     const run = await runDiscovery(

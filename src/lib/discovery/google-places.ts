@@ -3,13 +3,13 @@ import { normalizeWebsite } from './overpass';
 import type { DiscoveryProvider, DiscoveryQuery, DiscoveryResult, DiscoveredCompany, VerifiedContact } from './types';
 
 /**
- * Discovery cez Google Places API (New).
+ * Discovery via the Google Places API (New).
  *
- * Lepšie pokrytie než OSM, hlavne v USA a UK, a takmer vždy má web aj telefón.
- * Za to platíš kartou a viažeš sa na podmienky Google - preto to nie je default,
- * ale voľba, keď OSM v danej oblasti nestačí.
+ * Better coverage than OSM, especially in the US and UK, and it almost always
+ * has both a website and a phone number. You pay for it with a card and accept
+ * Google's terms - which is why it is opt-in rather than the default.
  *
- * Kľúč sa berie z GOOGLE_PLACES_API_KEY a nikdy sa nikam neukladá.
+ * The key comes from GOOGLE_PLACES_API_KEY and is never stored anywhere.
  */
 
 const PLACES_SEARCH = 'https://places.googleapis.com/v1/places:searchText';
@@ -45,10 +45,10 @@ export class GooglePlacesProvider implements DiscoveryProvider {
   }
 
   async search(query: DiscoveryQuery): Promise<DiscoveryResult> {
-    if (!this.apiKey) throw new Error('GOOGLE_PLACES_API_KEY nie je nastavený');
+    if (!this.apiKey) throw new Error('GOOGLE_PLACES_API_KEY is not set');
 
     const category = resolveIndustry(query.industry);
-    const limit = Math.min(query.limit ?? 25, 20); // Places vracia max 20 na stránku.
+    const limit = Math.min(query.limit ?? 25, 20); // Places returns at most 20 per page.
     const where = query.city ? `${query.city}, ${query.country}` : query.country;
     const textQuery = `${category?.label ?? query.industry} in ${where}`;
 
@@ -57,7 +57,7 @@ export class GooglePlacesProvider implements DiscoveryProvider {
       headers: {
         'content-type': 'application/json',
         'X-Goog-Api-Key': this.apiKey,
-        // Field mask drží cenu dole - platí sa za vrátené polia.
+        // The field mask keeps the cost down - you pay per returned field.
         'X-Goog-FieldMask': [
           'places.id', 'places.displayName', 'places.formattedAddress', 'places.websiteUri',
           'places.nationalPhoneNumber', 'places.internationalPhoneNumber', 'places.primaryType',
@@ -73,7 +73,7 @@ export class GooglePlacesProvider implements DiscoveryProvider {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
-      throw new Error(`Google Places vrátil HTTP ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`);
+      throw new Error(`Google Places returned HTTP ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`);
     }
 
     const body = (await res.json()) as { places?: PlacesPlace[] };
@@ -87,7 +87,7 @@ export class GooglePlacesProvider implements DiscoveryProvider {
 
       const website = normalizeWebsite(place.websiteUri);
       if (query.requireWebsite !== false && !website) {
-        skipped.push({ name, reason: 'Places nemá web - bez webu sa nedá urobiť audit' });
+        skipped.push({ name, reason: 'no website in Places - without one there is nothing to audit' });
         continue;
       }
 
@@ -102,7 +102,7 @@ export class GooglePlacesProvider implements DiscoveryProvider {
           evidence_url: source_url, checked_at: fetched_at,
         });
       }
-      // Places zámerne nevracia emaily, takže tu žiadny nevzniká.
+      // Places deliberately returns no emails, so none is invented here.
 
       const cityComponent = place.addressComponents
         ?.find((c) => c.types?.includes('locality') || c.types?.includes('postal_town'))?.longText;
@@ -122,7 +122,7 @@ export class GooglePlacesProvider implements DiscoveryProvider {
           fields: ['name', 'address', ...(website ? ['website'] : []), ...(phone ? ['phone'] : [])],
           fetched_at,
         }],
-        match_reason: `Google Places "${place.primaryType ?? category?.places[0] ?? query.industry}" v ${where}`,
+        match_reason: `Google Places "${place.primaryType ?? category?.places[0] ?? query.industry}" in ${where}`,
       });
     }
 

@@ -2,30 +2,31 @@ import { crawlSite, CrawlError, type Fetcher } from '@/lib/scrape/crawl';
 import type { DiscoveredCompany, VerifiedContact } from './types';
 
 /**
- * Overenie firmy proti jej vlastnému webu.
+ * Verifies a company against its own website.
  *
- * Pravidlo, ktoré tu platí bez výnimky: kontakt sa NIKDY neodvodzuje. Žiadne
- * "asi to bude info@domena.com", žiadne skladanie mena a priezviska. Kontakt je
- * platný len vtedy, ak je niekde reálne napísaný, a nesie URL, na ktorej stojí.
+ * The rule here holds without exception: a contact is NEVER derived. No
+ * "it is probably info@domain.com", no assembling first and last names. A
+ * contact is valid only if it is actually written somewhere, and it carries
+ * the URL where it appears.
  *
- * Kontakt z adresára (OSM/Places) sa povýši na `found_on_site` iba ak ho nájdeme
- * aj na webe firmy. Ak sa nenájde, ostáva `from_directory` - použiteľný, ale
- * slabší dôkaz, a UI to hovorí nahlas.
+ * A directory contact (OSM/Places) is promoted to `found_on_site` only if we
+ * also find it on the company's site. If not, it stays `from_directory` -
+ * usable, but weaker evidence, and the UI says so out loud.
  */
 
 export interface VerifiedCompany extends DiscoveredCompany {
   verification: {
     website_reachable: boolean;
-    /** Prečo nie, ak nie. */
+    /** Why not, when it is not. */
     website_error: string | null;
     pages_read: number;
-    /** Meno firmy sa dá nájsť na jej vlastnom webe - potvrdzuje, že web patrí jej. */
+    /** The name appears on the site - evidence the site really is theirs. */
     name_matches_site: boolean;
     checked_at: string;
   };
 }
 
-/** Uvoľnené porovnanie mena: "Karoséria Hronec s.r.o." vs "Karoseria Hronec". */
+/** Loose name comparison: "Karoseria Hronec s.r.o." vs "Karoseria Hronec". */
 function nameAppearsOnSite(name: string, corpus: string): boolean {
   const strip = (s: string) => s
     .toLowerCase()
@@ -40,7 +41,7 @@ function nameAppearsOnSite(name: string, corpus: string): boolean {
   if (needle.length < 3) return false;
   if (hay.includes(needle)) return true;
 
-  // Aspoň dve výrazné slová z názvu - poradie slov sa medzi zdrojmi líši.
+  // At least two distinctive words - word order differs between sources.
   const words = needle.split(' ').filter((w) => w.length >= 4);
   const hits = words.filter((w) => hay.includes(w)).length;
   return words.length >= 2 ? hits >= 2 : hits >= 1;
@@ -48,7 +49,7 @@ function nameAppearsOnSite(name: string, corpus: string): boolean {
 
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 
-/** Porovnáva len číslice, lebo formátovanie sa medzi zdrojmi líši. */
+/** Compares digits only, because formatting differs between sources. */
 const digitsOf = (s: string) => s.replace(/\D/g, '');
 
 export interface VerifyOptions {
@@ -57,9 +58,9 @@ export interface VerifyOptions {
 }
 
 /**
- * Načíta verejný web firmy a povýši/doplní kontakty, ktoré sa na ňom naozaj
- * nachádzajú. Nedostupný web nie je dôvod firmu zahodiť - len sa to poctivo
- * zaznamená a audit sa nespustí.
+ * Reads the company's public site and promotes or adds the contacts that
+ * genuinely appear on it. An unreachable site is not a reason to discard the
+ * company - it is recorded honestly and the audit simply does not run.
  */
 export async function verifyCompany(
   company: DiscoveredCompany,
@@ -72,7 +73,7 @@ export async function verifyCompany(
       ...company,
       verification: {
         website_reachable: false,
-        website_error: 'zdroj neuvádza web',
+        website_error: 'the source lists no website',
         pages_read: 0,
         name_matches_site: false,
         checked_at,
@@ -112,7 +113,7 @@ export async function verifyCompany(
     contacts.push(c);
   };
 
-  // 1) Emaily reálne napísané na webe.
+  // 1) Emails actually written on the site.
   for (const match of corpus.matchAll(EMAIL_RE)) {
     const email = match[0].toLowerCase();
     if (/\.(png|jpe?g|gif|webp|svg)$/.test(email)) continue;
@@ -122,7 +123,7 @@ export async function verifyCompany(
     });
   }
 
-  // 2) Telefóny zo signálov (tie sú detegované mechanicky z HTML).
+  // 2) Phone numbers from the signals (detected mechanically from the HTML).
   for (const phone of snapshot.signals.phone_numbers) {
     add({
       kind: 'phone', value: phone, verification: 'found_on_site',
@@ -132,12 +133,12 @@ export async function verifyCompany(
 
   if (snapshot.signals.has_contact_form) {
     add({
-      kind: 'form', value: 'kontaktný formulár na webe', verification: 'found_on_site',
+      kind: 'form', value: 'contact form on the website', verification: 'found_on_site',
       evidence_url: snapshot.pages[0].url, checked_at,
     });
   }
 
-  // 3) Kontakty z adresára: povýšiť ak sedia s webom, inak ponechať slabšie.
+  // 3) Directory contacts: promote if they match the site, else keep weaker.
   const siteDigits = new Set(snapshot.signals.phone_numbers.map(digitsOf));
   for (const original of company.contacts) {
     if (original.kind === 'phone') {
@@ -189,12 +190,12 @@ export async function verifyCompany(
   };
 }
 
-/** Firma je pripravená na audit, keď má dosiahnuteľný web. Bez neho nie je čo čítať. */
+/** A company is auditable once its site is reachable. Without it there is nothing to read. */
 export function readyForAudit(company: VerifiedCompany): boolean {
   return company.verification.website_reachable && company.verification.pages_read > 0;
 }
 
-/** Kontakt, ktorý smie ísť do outreachu: len taký, čo reálne niekde stojí. */
+/** A contact allowed into outreach: only one that actually appears somewhere. */
 export function contactableBy(company: VerifiedCompany, kind: 'email' | 'phone' | 'form'): VerifiedContact | null {
   const candidates = company.contacts.filter((c) => c.kind === kind && c.verification !== 'unverified');
   return candidates.find((c) => c.verification === 'found_on_site') ?? candidates[0] ?? null;

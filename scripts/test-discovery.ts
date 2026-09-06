@@ -1,12 +1,12 @@
 /**
- * Testy pre lead discovery: taxonómia, trhy, parsovanie oboch providerov,
- * overovanie kontaktov a schvaľovacia brána.
+ * Tests for lead discovery: taxonomy, markets, parsing for both providers,
+ * contact verification and the approval gate.
  *
  *   npm run test:discovery
  *
- * Beží offline proti fixtures. Živé volania Nominatim/Overpass/Places sa v
- * tomto prostredí overiť nedajú (sieť je blokovaná) - testuje sa parsovanie
- * a rozhodovanie, teda presne tie miesta, kde vzniká chyba.
+ * Runs offline against fixtures. Live Nominatim/Overpass/Places calls cannot be
+ * verified in this environment (the network is blocked) - what is tested is the
+ * parsing and the decisions, which is where the bugs actually live.
  */
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -35,7 +35,7 @@ const check = (label: string, ok: boolean, detail = '') => {
 /* ------------------------------------------------------------------ */
 
 function testTaxonomy() {
-  section('1. Taxonómia odvetví (globálne, viacjazyčne)');
+  section('1. Industry taxonomy (global, multilingual)');
   const cases: Array<[string, string]> = [
     ['car repair', 'auto_repair'], ['autoservis', 'auto_repair'], ['Autowerkstatt', 'auto_repair'],
     ['bilverkstad', 'auto_repair'], ['KFZ', 'auto_repair'],
@@ -49,7 +49,7 @@ function testTaxonomy() {
     const got = resolveIndustry(input);
     check(`"${input}" -> ${expected}`, got?.key === expected, got?.key ?? 'null');
   }
-  // Nemčina a severské jazyky skladajú slová - prioritné trhy to potrebujú.
+  // German and Nordic languages glue words together - the priority markets need this.
   const compounds: Array<[string, string]> = [
     ['Immobilienmakler', 'real_estate'], ['Zahnarztpraxis', 'dental'],
     ['Steuerberatungskanzlei', 'accounting'], ['Rechtsanwaltskanzlei', 'law'],
@@ -57,47 +57,47 @@ function testTaxonomy() {
   ];
   for (const [input, expected] of compounds) {
     const got = resolveIndustry(input);
-    check(`zložené slovo "${input}" -> ${expected}`, got?.key === expected, got?.key ?? 'null');
+    check(`compound "${input}" -> ${expected}`, got?.key === expected, got?.key ?? 'null');
   }
 
-  check('neznáme odvetvie vráti null, nehádame', resolveIndustry('interpretive dance studio') === null);
-  check('krátke slovo netrafí náhodnú kategóriu', resolveIndustry('shop') === null);
-  check('prázdny vstup vráti null', resolveIndustry('   ') === null);
+  check('unknown industry returns null, we do not guess', resolveIndustry('interpretive dance studio') === null);
+  check('a short word does not hit a random category', resolveIndustry('shop') === null);
+  check('empty input returns null', resolveIndustry('   ') === null);
 }
 
 function testMarkets() {
-  section('2. Trhové profily');
-  check('UK, USA, DACH aj Nordics sú medzi prioritnými',
+  section('2. Market profiles');
+  check('UK, US, DACH and Nordics are all priority markets',
     ['GB', 'US', 'DE', 'AT', 'CH', 'SE', 'NO', 'DK', 'FI'].every(
       (c) => PRIORITY_MARKETS.some((m) => m.country === c)));
-  check('Nemecko je označené ako vysokorizikové pre cold email',
+  check('Germany is flagged high-risk for cold email',
     getMarket('DE').outreach_risk === 'high');
-  check('Rakúsko tiež', getMarket('AT').outreach_risk === 'high');
-  check('Dánsko tiež', getMarket('DK').outreach_risk === 'high');
-  check('UK je nízkorizikové', getMarket('GB').outreach_risk === 'low');
-  check('USA je nízkorizikové', getMarket('US').outreach_risk === 'low');
-  check('USA vyžaduje fyzickú adresu v správe (CAN-SPAM)',
-    getMarket('US').required_in_message.some((r) => /adres/i.test(r)));
-  check('DACH dostane nemecký outreach',
+  check('Austria too', getMarket('AT').outreach_risk === 'high');
+  check('Denmark too', getMarket('DK').outreach_risk === 'high');
+  check('the UK is low-risk', getMarket('GB').outreach_risk === 'low');
+  check('the US is low-risk', getMarket('US').outreach_risk === 'low');
+  check('the US requires a physical address in the message (CAN-SPAM)',
+    getMarket('US').required_in_message.some((r) => /postal address/i.test(r)));
+  check('DACH gets German-language outreach',
     ['DE', 'AT', 'CH'].every((c) => getMarket(c).outreach_language === 'German'));
-  check('neznáma krajina je konzervatívne vysokoriziková',
+  check('an unmapped country is conservatively high-risk',
     getMarket('ZZ').outreach_risk === 'high');
-  check('neznáma krajina si nesie zadaný kód', getMarket('ZZ').country === 'ZZ');
-  check('každý trh má odhlásenie medzi povinnosťami',
-    MARKETS.every((m) => m.required_in_message.some((r) => /odhlásen/i.test(r))));
-  check('case-insensitive kód krajiny', getMarket('gb').country === 'GB');
+  check('an unmapped country keeps the code it was given', getMarket('ZZ').country === 'ZZ');
+  check('every market requires a working opt-out',
+    MARKETS.every((m) => m.required_in_message.some((r) => /opt-out/i.test(r))));
+  check('country code is case-insensitive', getMarket('gb').country === 'GB');
 }
 
 function testWebsiteNormalisation() {
-  section('3. Normalizácia webu zo zdroja');
-  check('doplní schému', normalizeWebsite('quaystreetmotors.example') === 'https://quaystreetmotors.example');
-  check('odreže trailing slash', normalizeWebsite('https://x.example/') === 'https://x.example');
-  check('vezme prvý z viacerých', normalizeWebsite('https://a.example; https://b.example') === 'https://a.example');
-  check('sociálna sieť NIE je firemný web',
+  section('3. Website normalisation from the source');
+  check('adds the scheme', normalizeWebsite('quaystreetmotors.example') === 'https://quaystreetmotors.example');
+  check('trims the trailing slash', normalizeWebsite('https://x.example/') === 'https://x.example');
+  check('takes the first of several', normalizeWebsite('https://a.example; https://b.example') === 'https://a.example');
+  check('a social profile is NOT a company website',
     normalizeWebsite('https://www.facebook.com/salfordtyres') === null);
-  check('LinkedIn tiež nie', normalizeWebsite('https://linkedin.com/company/x') === null);
-  check('nezmysel vráti null', normalizeWebsite('nonsense') === null);
-  check('prázdno vráti null', normalizeWebsite(undefined) === null);
+  check('nor is LinkedIn', normalizeWebsite('https://linkedin.com/company/x') === null);
+  check('nonsense returns null', normalizeWebsite('nonsense') === null);
+  check('empty returns null', normalizeWebsite(undefined) === null);
 }
 
 async function testOverpass() {
@@ -105,26 +105,26 @@ async function testOverpass() {
   const provider = new OverpassProvider({ fetch: fixtureSearchFetch() });
   const out = await provider.search({ industry: 'car repair', country: 'GB', city: 'Manchester', limit: 10 });
 
-  check('provider je vždy dostupný (bez kľúča)', provider.available());
-  check('vyriešil oblasť cez Nominatim', out.query_echo.resolved_area.includes('Manchester'));
-  check('našiel firmy s webom', out.companies.length >= 2, `${out.companies.length}`);
-  check('firma bez webu je vynechaná, nie vymyslená',
+  check('provider is always available (no key needed)', provider.available());
+  check('resolved the area via Nominatim', out.query_echo.resolved_area.includes('Manchester'));
+  check('found companies that have a website', out.companies.length >= 2, `${out.companies.length}`);
+  check('a company with no website is skipped, not invented',
     out.skipped.some((s) => s.name === 'Ancoats Body Shop'));
-  check('firma bez názvu sa ignoruje',
+  check('a nameless record is ignored',
     !out.companies.some((c) => !c.name));
-  check('firma, ktorej "web" je Facebook, je vynechaná',
+  check('a company whose "website" is Facebook is skipped',
     out.skipped.some((s) => s.name === 'Salford Tyres Direct'));
 
   const first = out.companies[0];
-  check('každá firma nesie aspoň jeden zdroj', out.companies.every((c) => c.sources.length >= 1));
-  check('zdroj je overiteľná OSM URL', /openstreetmap\.org\/node\/1001/.test(first.sources[0].source_url));
-  check('zdroj hovorí, ktoré polia z neho pochádzajú', first.sources[0].fields.includes('website'));
-  check('kontakty z adresára sú označené from_directory',
+  check('every company carries at least one source', out.companies.every((c) => c.sources.length >= 1));
+  check('the source is a checkable OSM URL', /openstreetmap\.org\/node\/1001/.test(first.sources[0].source_url));
+  check('the source states which fields came from it', first.sources[0].fields.includes('website'));
+  check('directory contacts are labelled from_directory',
     first.contacts.every((c) => c.verification === 'from_directory'));
-  check('žiadny kontakt nie je odvodený z domény',
+  check('no contact is derived from the domain',
     !out.companies.some((c) => c.contacts.some((x) => x.kind === 'email' && x.evidence_url === null)));
-  check('match_reason vysvetľuje, prečo firma vyhovuje', first.match_reason.length > 10);
-  check('neznáme odvetvie provider odmietne',
+  check('match_reason explains why the company matched', first.match_reason.length > 10);
+  check('the provider rejects an unknown industry',
     await provider.search({ industry: 'balloon animals', country: 'GB' }).then(() => false, () => true));
   return out;
 }
@@ -132,123 +132,123 @@ async function testOverpass() {
 async function testPlaces() {
   section('5. Google Places provider');
   const noKey = new GooglePlacesProvider({ apiKey: undefined, fetch: fixtureSearchFetch() });
-  check('bez kľúča sa hlási ako nedostupný', !noKey.available());
-  check('bez kľúča volanie zlyhá zrozumiteľne',
+  check('reports itself unavailable without a key', !noKey.available());
+  check('without a key the call fails clearly',
     await noKey.search({ industry: 'car repair', country: 'GB' }).then(() => false, (e) => /GOOGLE_PLACES_API_KEY/.test(e.message)));
 
   const provider = new GooglePlacesProvider({ apiKey: 'test-key-not-real', fetch: fixtureSearchFetch() });
   const out = await provider.search({ industry: 'car repair', country: 'GB', city: 'Manchester' });
-  check('s kľúčom je dostupný', provider.available());
-  check('parsuje odpoveď Places', out.companies.length === 1, `${out.companies.length}`);
-  check('firma bez webu je vynechaná', out.skipped.some((s) => s.name === 'Deansgate Service Centre'));
-  check('zdroj je overiteľný Maps odkaz', /place_id:ChIJplace001/.test(out.companies[0].sources[0].source_url));
-  check('Places nevracia email, tak žiadny nevzniká',
+  check('available once a key is present', provider.available());
+  check('parses the Places response', out.companies.length === 1, `${out.companies.length}`);
+  check('a company with no website is skipped', out.skipped.some((s) => s.name === 'Deansgate Service Centre'));
+  check('the source is a checkable Maps link', /place_id:ChIJplace001/.test(out.companies[0].sources[0].source_url));
+  check('Places returns no email, so none is invented',
     out.companies[0].contacts.every((c) => c.kind !== 'email'));
 }
 
 async function testVerification() {
-  section('6. Overenie kontaktov proti webu firmy');
+  section('6. Contact verification against the company site');
   const provider = new OverpassProvider({ fetch: fixtureSearchFetch() });
   const found = await provider.search({ industry: 'car repair', country: 'GB', city: 'Manchester' });
   const northgate = found.companies.find((c) => c.name === 'Northgate Auto Repairs')!;
 
   const verified = await verifyCompany(northgate, { fetcher: fixtureSiteFetcher() });
-  check('web je dosiahnuteľný', verified.verification.website_reachable);
-  check('prečítal viac stránok', verified.verification.pages_read >= 2, `${verified.verification.pages_read}`);
-  check('názov firmy potvrdený na jej webe', verified.verification.name_matches_site);
+  check('the site is reachable', verified.verification.website_reachable);
+  check('read several pages', verified.verification.pages_read >= 2, `${verified.verification.pages_read}`);
+  check('company name confirmed on its own site', verified.verification.name_matches_site);
 
   const email = verified.contacts.find((c) => c.kind === 'email');
-  check('email nájdený priamo na webe', email?.verification === 'found_on_site', email?.verification);
-  check('email nesie URL, kde stojí', Boolean(email?.evidence_url), email?.evidence_url ?? 'null');
-  check('email je ten reálny z webu', email?.value === 'bookings@northgate-auto.example', email?.value);
-  check('žiadny vymyslený info@ / contact@ tvar',
+  check('email found directly on the site', email?.verification === 'found_on_site', email?.verification);
+  check('the email carries the URL where it appears', Boolean(email?.evidence_url), email?.evidence_url ?? 'null');
+  check('the email is the real one from the site', email?.value === 'bookings@northgate-auto.example', email?.value);
+  check('no invented info@ / contact@ form',
     !verified.contacts.some((c) => c.kind === 'email' && /^(info|contact|hello|sales)@/.test(c.value)));
 
   const phone = verified.contacts.find((c) => c.kind === 'phone' && c.verification === 'found_on_site');
-  check('telefón z adresára povýšený, lebo sedí s webom', Boolean(phone), phone?.value ?? 'žiadny');
-  check('kontaktný formulár zachytený', verified.contacts.some((c) => c.kind === 'form'));
-  check('pribudol zdroj typu website', verified.sources.some((s) => s.provider === 'website'));
-  check('contactableBy uprednostní dôkaz z webu',
+  check('directory phone promoted because it matches the site', Boolean(phone), phone?.value ?? 'none');
+  check('contact form detected', verified.contacts.some((c) => c.kind === 'form'));
+  check('a website source was added', verified.sources.some((s) => s.provider === 'website'));
+  check('contactableBy prefers site evidence',
     contactableBy(verified, 'email')?.verification === 'found_on_site');
 
-  // Firma, ktorej web nejde načítať, sa nezahodí, ale ani nepustí do auditu.
+  // A company whose site cannot be read is not discarded, but not audited either.
   const dead = found.companies.find((c) => c.name === 'Quay Street Motors')!;
   const deadVerified = await verifyCompany(dead, { fetcher: fixtureSiteFetcher() });
-  check('nedostupný web je poctivo zaznamenaný', !deadVerified.verification.website_reachable);
-  check('a nesie dôvod', Boolean(deadVerified.verification.website_error));
+  check('an unreachable site is recorded honestly', !deadVerified.verification.website_reachable);
+  check('and carries the reason', Boolean(deadVerified.verification.website_error));
 }
 
 async function testDiscoveryRun() {
-  section('7. Celý discovery beh -> CRM');
+  section('7. Full discovery run -> CRM');
   const run = await runDiscovery(
     { industry: 'car repair', country: 'GB', city: 'Manchester', limit: 10, requireWebsite: true },
     { provider: 'overpass', searchFetch: fixtureSearchFetch(), siteFetcher: fixtureSiteFetcher() },
   );
 
-  check('beh sa dokončil', run.summary.found > 0);
-  check('trh rozpoznaný ako UK', run.market.country === 'GB');
-  check('aspoň jedna firma je pripravená na audit', run.summary.ready_for_audit >= 1);
-  check('uloží sa len to, čo prešlo overením',
+  check('the run completed', run.summary.found > 0);
+  check('market resolved as the UK', run.market.country === 'GB');
+  check('at least one company is ready to audit', run.summary.ready_for_audit >= 1);
+  check('only what passed verification is saved',
     run.summary.saved === run.results.filter((r) => r.lead).length);
-  check('firmy s nedostupným webom sa neuložia',
+  check('companies with an unreachable site are not saved',
     run.results.filter((r) => !r.company.verification.website_reachable).every((r) => r.lead === null));
-  check('raw_query je uložený pre reprodukovateľnosť', run.raw_query.includes('shop'));
+  check('raw_query is kept for reproducibility', run.raw_query.includes('shop'));
 
   const store = await getStore();
   const saved = run.results.find((r) => r.lead)!;
   const lead = await store.getLead(saved.lead!.id);
-  check('lead je v CRM v stave new', lead?.stage === 'new');
-  check('lead nesie zdroj discovery', lead?.source.startsWith('discovery:') === true, lead?.source);
-  check('poznámka obsahuje overiteľnú zdrojovú URL',
+  check('the lead is in the CRM at stage new', lead?.stage === 'new');
+  check('the lead records the discovery source', lead?.source.startsWith('discovery:') === true, lead?.source);
+  check('the note contains a checkable source URL',
     lead?.notes?.includes('openstreetmap.org') === true);
-  check('do CRM sa uložili len kontakty s dôkazom',
+  check('only contacts with evidence reached the CRM',
     (lead?.contacts.length ?? 0) > 0 && lead!.contacts.every((c) => c.label !== 'unverified'));
-  check('kontakty nesú URL dôkazu', lead!.contacts.every((c) => Boolean(c.source_url)));
+  check('contacts carry an evidence URL', lead!.contacts.every((c) => Boolean(c.source_url)));
 
-  // Opakovaný beh nesmie duplikovať.
+  // A repeat run must not duplicate.
   const before = (await store.listLeads()).length;
   await runDiscovery(
     { industry: 'car repair', country: 'GB', city: 'Manchester', limit: 10, requireWebsite: true },
     { provider: 'overpass', searchFetch: fixtureSearchFetch(), siteFetcher: fixtureSiteFetcher() },
   );
-  check('opakovaný beh neduplikuje leady', (await store.listLeads()).length === before);
+  check('a repeat run does not duplicate leads', (await store.listLeads()).length === before);
 
-  check('neznáme odvetvie beh odmietne',
+  check('the run rejects an unknown industry',
     await runDiscovery({ industry: 'balloon animals', country: 'GB' }, { provider: 'overpass' })
-      .then(() => false, (e) => /nepoznám/.test(e.message)));
-  check('chýbajúca krajina beh odmietne',
+      .then(() => false, (e) => /Unknown industry/.test(e.message)));
+  check('the run rejects a missing country',
     await runDiscovery({ industry: 'car repair', country: '' }, { provider: 'overpass' })
-      .then(() => false, (e) => /Krajina/.test(e.message)));
+      .then(() => false, (e) => /Country is required/.test(e.message)));
 
   return saved.lead!.id;
 }
 
 async function testApprovalGate(leadId: string) {
-  section('8. Povinné manuálne schválenie');
+  section('8. Mandatory manual approval');
   const store = await getStore();
   const lead = (await store.getLead(leadId))!;
 
   const draft = await store.insertOutreach({
     lead_id: leadId, audit_id: 'audit-placeholder', channel: 'email', step: 0,
     subject: 'Northgate Auto Repairs',
-    body: 'Na northgate-auto.example píšete, že na emaily odpovedáte do 24 hodín. Ozval by som sa ohľadom toho.',
-    status: 'draft', grounding: ['citát z webu'], approved_at: null, sent_at: null,
+    body: 'On northgate-auto.example you say you reply to emails within 24 hours. That is what I wanted to ask about.',
+    status: 'draft', grounding: ['quote from the site'], approved_at: null, sent_at: null,
     created_at: new Date().toISOString(),
   });
 
-  check('vygenerovaná správa je draft, nie odoslaná', draft.status === 'draft');
+  check('a generated message is a draft, not sent', draft.status === 'draft');
 
   const review = reviewOutreach(draft, lead);
-  check('review vráti trh leadu', review.market.country === 'GB');
-  check('UK draft nemá blokátory', review.blockers.length === 0, review.blockers.join(' | '));
-  check('review pripomenie povinné náležitosti trhu', review.warnings.length > 0);
-  check('UK nevyžaduje vedomé potvrdenie rizika', !review.requires_explicit_ack);
+  check('review returns the lead market', review.market.country === 'GB');
+  check('a UK draft has no blockers', review.blockers.length === 0, review.blockers.join(' | '));
+  check('review surfaces the market requirements', review.warnings.length > 0);
+  check('the UK needs no explicit risk acknowledgement', !review.requires_explicit_ack);
 
   const approved = await approveOutreachForLead(leadId, draft.id);
-  check('schválenie posunie draft -> approved', approved.status === 'approved');
-  check('schválenie nič neodoslalo', approved.sent_at === null);
+  check('approval moves draft -> approved', approved.status === 'approved');
+  check('approval sent nothing', approved.sent_at === null);
 
-  // Ten istý draft na nemeckom leade sa bez vedomého potvrdenia schváliť nedá.
+  // The same draft on a German lead cannot be approved without acknowledgement.
   const deLead = await store.upsertLead({
     company_name: 'Muster Autowerkstatt', website: 'https://muster-werkstatt.example',
     industry: 'car repair', country: 'DE', size_hint: null, stage: 'new',
@@ -259,26 +259,26 @@ async function testApprovalGate(leadId: string) {
     lead_id: deLead.id, audit_id: 'audit-placeholder', channel: 'email', step: 0,
     subject: 'Muster Autowerkstatt',
     body: 'Auf muster-werkstatt.example steht, dass Sie innerhalb von 24 Stunden antworten.',
-    status: 'draft', grounding: ['Zitat von der Website'], approved_at: null, sent_at: null,
+    status: 'draft', grounding: ['quote from the website'], approved_at: null, sent_at: null,
     created_at: new Date().toISOString(),
   });
 
   const deReview = reviewOutreach(deDraft, deLead);
-  check('nemecký lead je označený ako vysokorizikový', deReview.requires_explicit_ack);
-  check('varovanie vysvetľuje prečo (UWG)', deReview.warnings.some((w) => /UWG/.test(w)));
+  check('the German lead is flagged high-risk', deReview.requires_explicit_ack);
+  check('the warning explains why (UWG)', deReview.warnings.some((w) => /UWG/.test(w)));
 
   let refused = false;
   try {
     await approveOutreachForLead(deLead.id, deDraft.id);
   } catch (err) {
-    refused = err instanceof Error && /vysokorizikov/.test(err.message);
+    refused = err instanceof Error && /high-risk market/.test(err.message);
   }
-  check('schválenie pre DE bez vedomého potvrdenia je ODMIETNUTÉ', refused);
+  check('approval for DE without acknowledgement is REFUSED', refused);
 
   const ackd = await approveOutreachForLead(deLead.id, deDraft.id, { acknowledgeMarketRisk: true });
-  check('s vedomým potvrdením prejde', ackd.status === 'approved');
+  check('with the acknowledgement it goes through', ackd.status === 'approved');
 
-  // Neuzemnená správa musí padnúť aj s potvrdením rizika.
+  // An ungrounded message must fail even with the risk acknowledged.
   const spam = await store.insertOutreach({
     lead_id: leadId, audit_id: 'audit-placeholder', channel: 'email', step: 9,
     subject: 'Quick question', body: 'Hope this email finds you well! We leverage AI to unlock efficiency.',
@@ -291,17 +291,17 @@ async function testApprovalGate(leadId: string) {
   } catch {
     spamRefused = true;
   }
-  check('generická neuzemnená správa je odmietnutá aj s potvrdením rizika', spamRefused);
+  check('a generic ungrounded message is refused even with the risk acknowledged', spamRefused);
 
   const all: OutreachMessage[] = await store.listOutreach(leadId);
-  check('nič sa nikdy neoznačilo ako odoslané samo', all.every((m) => m.sent_at === null));
+  check('nothing ever marked itself as sent', all.every((m) => m.sent_at === null));
 }
 
 /* ------------------------------------------------------------------ */
 
 async function main() {
   await rm(DATA_FILE, { force: true });
-  console.log('Discovery testy (offline fixtures, izolovaný dátový súbor)');
+  console.log('Discovery tests (offline fixtures, isolated data file)');
 
   testTaxonomy();
   testMarkets();

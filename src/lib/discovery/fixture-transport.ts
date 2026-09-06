@@ -4,10 +4,10 @@ import type { Fetcher } from '@/lib/scrape/crawl';
 import { fixtureFetcher } from '@/lib/scrape/fixture-fetcher';
 
 /**
- * Offline náhrada za Nominatim / Overpass / Places.
+ * Offline stand-in for Nominatim / Overpass / Places.
  *
- * Testy aj `--offline` beh idú cez rovnaký kód ako produkcia - mení sa iba
- * transport. Vďaka tomu parsovanie odpovedí testujeme naozaj, nie obídeme.
+ * Tests and `--offline` runs go through the same code as production - only the
+ * transport changes. That way response parsing is genuinely tested, not bypassed.
  */
 export function fixtureSearchFetch(): typeof fetch {
   const dir = join(process.cwd(), 'fixtures', 'discovery');
@@ -26,13 +26,13 @@ export function fixtureSearchFetch(): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-/** Weby fiktívnych firiem, ktoré discovery fixtures vracajú. */
+/** Websites of the fictional companies the discovery fixtures return. */
 const SITES: Record<string, string> = {
   'northgate-auto.example': 'northgate-auto',
   'www.northgate-auto.example': 'northgate-auto',
 };
 
-/** Známa doména -> bundled web; všetko ostatné je nedostupné, tak ako v realite. */
+/** Known domain -> bundled site; everything else is unreachable, as in reality. */
 export function fixtureSiteFetcher(): Fetcher {
   return async (url: string) => {
     const host = new URL(url).hostname;

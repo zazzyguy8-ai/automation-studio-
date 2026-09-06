@@ -5,11 +5,11 @@ export const dynamic = 'force-dynamic';
 export default function DiscoverPage() {
   return (
     <>
-      <h2>Nájsť firmy</h2>
+      <h2>Find companies</h2>
       <p className="sub">
-        Zadaj odvetvie a krajinu/mesto. Systém nájde firmy vo verejných zdrojoch, načíta ich web,
-        overí kontakty proti ich vlastnej stránke a uloží ich ako leady. Každý údaj si nesie
-        odkaz na zdroj — nič sa nedopĺňa odhadom.
+        Enter an industry and a country/city. The system finds companies in public sources, reads
+        their website, verifies contacts against their own pages, and saves them as leads. Every
+        value carries a link to its source — nothing is filled in by guesswork.
       </p>
       <DiscoverForm />
     </>

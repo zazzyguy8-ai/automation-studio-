@@ -1,12 +1,12 @@
 /**
- * Odvetvie + krajina/mesto -> overené firmy -> leady v CRM.
+ * Industry + country/city -> verified companies -> leads in the CRM.
  *
  *   npm run discover -- --industry "car repair" --country GB --city Manchester
- *   npm run discover -- --industry autoservis --country DE --city Munich --limit 10
+ *   npm run discover -- --industry Zahnarzt --country DE --city Munich --limit 10
  *   npm run discover -- --industry "car repair" --country GB --city Manchester --offline
  *
- * Nič sa neodosiela. Discovery iba naplní pipeline v stave `new`; audit spustíš
- * potom cez `npm run pipeline -- <url>` alebo z UI.
+ * Nothing is sent. Discovery only fills the pipeline at stage `new`; run the
+ * audit afterwards with `npm run pipeline -- <url>` or from the UI.
  */
 import { runDiscovery } from '@/lib/discovery/run';
 import { fixtureSearchFetch, fixtureSiteFetcher } from '@/lib/discovery/fixture-transport';
@@ -23,19 +23,19 @@ const has = (flag: string) => process.argv.includes(flag);
 const h1 = (s: string) => console.log(`\n\x1b[1m${s}\x1b[0m\n${'-'.repeat(s.length)}`);
 
 const USAGE = [
-  'usage: npm run discover -- --industry "<odvetvie>" --country <ISO> [--city <mesto>]',
+  'usage: npm run discover -- --industry "<industry>" --country <ISO> [--city <city>]',
   '',
-  '  --industry <text>   napr. "car repair", "Zahnarzt", "autoservis", "roofing"',
-  '  --country <ISO>     napr. GB, US, DE, AT, CH, SE, NO, DK, FI',
-  '  --city <mesto>      nepovinné, ale výrazne presnejšie',
-  '  --limit <n>         koľko firiem najviac (default 15)',
+  '  --industry <text>   e.g. "car repair", "Zahnarzt", "autoservis", "roofing"',
+  '  --country <ISO>     e.g. GB, US, DE, AT, CH, SE, NO, DK, FI',
+  '  --city <city>       optional, but markedly more precise',
+  '  --limit <n>         how many companies at most (default 15)',
   '  --provider <name>   auto | overpass | google_places (default auto)',
-  '  --no-verify         preskočiť načítanie webov (rýchlejšie, bez dôkazov)',
-  '  --offline           použiť zabudované fixtures namiesto siete',
+  '  --no-verify         skip reading the websites (faster, but no evidence)',
+  '  --offline           use the bundled fixtures instead of the network',
   '',
-  `odvetvia: ${industryOptions().map((i) => i.label).join(', ')}`,
-  `prioritné trhy: ${PRIORITY_MARKETS.map((m) => m.country).join(', ')}`,
-  `všetky zmapované: ${MARKETS.map((m) => m.country).join(', ')}`,
+  `industries: ${industryOptions().map((i) => i.label).join(', ')}`,
+  `priority markets: ${PRIORITY_MARKETS.map((m) => m.country).join(', ')}`,
+  `all mapped: ${MARKETS.map((m) => m.country).join(', ')}`,
 ].join('\n');
 
 async function main() {
@@ -50,8 +50,8 @@ async function main() {
   const provider = (arg('--provider') ?? 'auto') as 'auto' | 'overpass' | 'google_places';
 
   console.log(offline
-    ? 'zdroj: zabudované fixtures (--offline)'
-    : `zdroj: ${provider === 'auto' ? (process.env.GOOGLE_PLACES_API_KEY ? 'google_places' : 'overpass (OpenStreetMap)') : provider}`);
+    ? 'source: bundled fixtures (--offline)'
+    : `source: ${provider === 'auto' ? (process.env.GOOGLE_PLACES_API_KEY ? 'google_places' : 'overpass (OpenStreetMap)') : provider}`);
 
   const run = await runDiscovery(
     {
@@ -68,42 +68,42 @@ async function main() {
     },
   );
 
-  h1(`${run.summary.found} firiem · ${run.resolved_area}`);
+  h1(`${run.summary.found} companies · ${run.resolved_area}`);
   console.log(`provider: ${run.provider}`);
-  console.log(`trh: ${run.market.name} · jazyk outreachu: ${run.market.outreach_language}`);
-  console.log(`outreach riziko: ${run.market.outreach_risk.toUpperCase()}`);
+  console.log(`market: ${run.market.name} · outreach language: ${run.market.outreach_language}`);
+  console.log(`outreach risk: ${run.market.outreach_risk.toUpperCase()}`);
   console.log(`  ${run.market.outreach_note}`);
 
-  h1('ULOŽENÉ DO CRM');
+  h1('SAVED TO CRM');
   for (const r of run.results.filter((x) => x.lead)) {
     const verified = r.company.contacts.filter((c) => c.verification === 'found_on_site');
     console.log(`\n  ${r.company.name}`);
-    console.log(`    web:      ${r.company.website}`);
-    console.log(`    zdroj:    ${r.company.sources[0].source_url}`);
-    console.log(`    názov overený na webe: ${r.company.verification.name_matches_site ? 'áno' : 'NIE - over ručne'}`);
-    console.log(`    kontakty potvrdené na webe: ${verified.length
+    console.log(`    site:     ${r.company.website}`);
+    console.log(`    source:   ${r.company.sources[0].source_url}`);
+    console.log(`    name confirmed on site: ${r.company.verification.name_matches_site ? 'yes' : 'NO - check by hand'}`);
+    console.log(`    contacts confirmed on site: ${verified.length
       ? verified.map((c) => `${c.kind}:${c.value}`).join(', ')
-      : 'žiadne'}`);
+      : 'none'}`);
     const dir = r.company.contacts.filter((c) => c.verification === 'from_directory');
-    if (dir.length) console.log(`    len z adresára (slabší dôkaz): ${dir.map((c) => `${c.kind}:${c.value}`).join(', ')}`);
+    if (dir.length) console.log(`    directory only (weaker evidence): ${dir.map((c) => `${c.kind}:${c.value}`).join(', ')}`);
     console.log(`    audit: npm run pipeline -- ${r.company.website} --industry "${industry}" --country ${run.market.country}`);
   }
 
   const rejected = run.results.filter((x) => !x.lead);
   if (rejected.length > 0) {
-    h1('VYNECHANÉ');
+    h1('SKIPPED');
     for (const r of rejected) console.log(`  ${r.company.name} — ${r.rejected_reason}`);
   }
   if (run.skipped.length > 0) {
     for (const s of run.skipped) console.log(`  ${s.name} — ${s.reason}`);
   }
 
-  h1('SÚHRN');
-  console.log(`  nájdené:            ${run.summary.found}`);
-  console.log(`  web dostupný:       ${run.summary.verified}`);
-  console.log(`  pripravené na audit:${run.summary.ready_for_audit}`);
-  console.log(`  uložené ako lead:   ${run.summary.saved}`);
-  console.log('\nNič sa neodoslalo. Discovery iba plní pipeline v stave `new`.');
+  h1('SUMMARY');
+  console.log(`  found:              ${run.summary.found}`);
+  console.log(`  site reachable:     ${run.summary.verified}`);
+  console.log(`  ready to audit:     ${run.summary.ready_for_audit}`);
+  console.log(`  saved as lead:      ${run.summary.saved}`);
+  console.log('\nNothing was sent. Discovery only fills the pipeline at stage `new`.');
 }
 
 main().catch((err) => {
