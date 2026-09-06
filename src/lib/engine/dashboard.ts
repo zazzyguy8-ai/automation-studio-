@@ -22,6 +22,7 @@ export interface EngineDashboard {
     awaiting_approval: number;
     approved_not_sent: number;
     scheduled_follow_ups: number;
+    follow_ups_pending_first_touch: number;
     sent: number;
     cancelled: number;
     suppressed: number;
@@ -59,11 +60,14 @@ export async function engineDashboard(inboxLimit = 25): Promise<EngineDashboard>
   const queued = await store.listOutreachByStatus('queued', 200);
 
   // The inbox holds what you can actually decide on now: first touches, and
-  // follow-ups whose scheduled time is within a day. A follow-up scheduled for
-  // next week is real work, but not today's, so it is counted and not listed.
+  // follow-ups whose scheduled time is within a day.
+  //
+  // An unscheduled follow-up is NOT actionable: it is waiting on its own first
+  // touch to be approved and sent. Counting those made a run of 100 report 300
+  // awaiting approval, when the operator only has 100 decisions to make.
   const soon = new Date(Date.now() + 86_400_000).toISOString();
   const actionable = (m: OutreachMessage) =>
-    m.step === 0 || !m.scheduled_at || m.scheduled_at <= soon;
+    m.step === 0 || (Boolean(m.scheduled_at) && m.scheduled_at! <= soon);
 
   const inbox: EngineDashboard['inbox'] = [];
   for (const message of drafts) {
@@ -104,6 +108,8 @@ export async function engineDashboard(inboxLimit = 25): Promise<EngineDashboard>
       awaiting_approval: drafts.filter(actionable).length,
       approved_not_sent: approved.length,
       scheduled_follow_ups: [...drafts, ...approved, ...queued].filter((m) => m.step > 0 && m.scheduled_at).length,
+      // Drafted, but blocked until their first touch goes out.
+      follow_ups_pending_first_touch: drafts.filter((m) => m.step > 0 && !m.scheduled_at).length,
       sent,
       cancelled: counts.cancelled ?? 0,
       suppressed: counts.suppressed ?? 0,

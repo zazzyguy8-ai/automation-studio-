@@ -43,7 +43,7 @@ export default async function EnginePage() {
         <Stat n={`${d.engine.sent_today}/${d.engine.daily_send_cap}`} l="sent today / cap" />
         <Stat n={d.messages.awaiting_approval} l="awaiting approval" tone={d.messages.awaiting_approval > 0 ? 'warn' : undefined} />
         <Stat n={d.messages.approved_not_sent} l="approved, not sent" />
-        <Stat n={d.messages.scheduled_follow_ups} l="follow-ups queued" />
+        <Stat n={d.messages.scheduled_follow_ups} l="follow-ups scheduled" />
       </div>
 
       <h3>Funnel</h3>

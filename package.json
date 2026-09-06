@@ -18,7 +18,8 @@
     "discover": "tsx --env-file-if-exists=.env.local scripts/discover.ts",
     "test:discovery": "tsx --env-file-if-exists=.env.local scripts/test-discovery.ts",
     "test:engine": "tsx --env-file-if-exists=.env.local scripts/test-engine.ts",
-    "engine": "tsx --env-file-if-exists=.env.local scripts/engine.ts"
+    "engine": "tsx --env-file-if-exists=.env.local scripts/engine.ts",
+    "experiment": "tsx --env-file-if-exists=.env.local scripts/experiment.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",

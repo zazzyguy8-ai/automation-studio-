@@ -249,6 +249,7 @@ visible rather than silently degraded.
 | `npm run discover -- --industry X --country GB` | Find and verify companies |
 | `npm run engine -- daily\|send\|status\|stop\|start` | Outreach engine |
 | `npm run test:engine` | Engine end to end over 50 demo leads |
+| `npm run experiment -- --report\|--run\|--status` | Experiment 01 (see docs/EXPERIMENT-01.md) |
 | `npm run test:discovery` | Discovery: taxonomy, markets, providers, verification, approval |
 | `npm run seed` | Populate the local store |
 | `npm test` | Typecheck + all three suites |
@@ -289,6 +290,10 @@ Failures tell you which stage broke and what to do:
 Put `DATABASE_URL` (Supabase → Project Settings → Database) in `.env.local` and
 run `npm run db:push`. That is the only change — the store interface is
 identical. Put the app behind auth before it holds client data.
+
+[docs/EXPERIMENT-01.md](docs/EXPERIMENT-01.md) is the first outbound experiment:
+the ICP, why it beat the alternatives, the offer, the price, and the exact
+thresholds that decide after 100 leads whether to scale it or change it.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the stack rationale, the
 n8n division of labour, and what was deliberately left out.
