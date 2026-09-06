@@ -1,0 +1,502 @@
+import type { BlueprintStep, CredentialRef } from '@/lib/types';
+
+export interface AgentTemplate {
+  key: string;
+  letter: string;
+  name: string;
+  /** Shown to the LLM so it picks a template from evidence, not from vibes. */
+  when_to_use: string;
+  problem_categories: string[];
+  steps: BlueprintStep[];
+  credentials: CredentialRef[];
+  integrations: string[];
+  human_handoff: { triggers: string[]; route_to: string; sla: string };
+  guardrails: string[];
+  /** Which lever this template moves. Drives the impact model — see estimate/. */
+  impact_driver: 'lead_response' | 'booking' | 'recovery' | 'admin_time' | 'reputation';
+  /** Realistic build effort for one operator, in days. */
+  build_days: number;
+}
+
+const cred = (
+  provider: string, env_var: string, scope: string,
+  docs_url: string | null = null, required = true,
+): CredentialRef => ({ provider, env_var, scope, required, status: 'missing', docs_url });
+
+const step = (
+  key: string, title: string, actor: BlueprintStep['actor'], description: string,
+  integration: string | null, config_keys: string[], how: string, expect: string,
+): BlueprintStep => ({
+  key, title, actor, description, integration, config_keys,
+  test: { how, expect }, status: 'todo',
+});
+
+/* SMS/voice: Telnyx is the EU-first default (EU numbers, EU data residency,
+ * cheaper A2P in most EU markets). Twilio is the drop-in alternative where
+ * Telnyx lacks coverage for the client's country. Blueprints reference the
+ * capability; the credential block names whichever provider was chosen. */
+const SMS_CREDS = [
+  cred('telnyx', 'TELNYX_API_KEY', 'SMS send + delivery webhooks', 'https://developers.telnyx.com'),
+  cred('telnyx', 'TELNYX_MESSAGING_PROFILE_ID', 'Which sending number pool to use'),
+  cred('twilio', 'TWILIO_ACCOUNT_SID', 'Alternative SMS provider if Telnyx lacks the country', null, false),
+  cred('twilio', 'TWILIO_AUTH_TOKEN', 'Alternative SMS provider auth', null, false),
+];
+
+const LLM_CRED = cred('anthropic', 'ANTHROPIC_API_KEY', 'Qualification + reply drafting');
+const CRM_CRED = cred('crm', 'CRM_API_KEY', 'Create/update contacts and deals', null, false);
+
+export const TEMPLATES: AgentTemplate[] = [
+  {
+    key: 'lead_response',
+    letter: 'A',
+    name: 'Lead Response + Qualification',
+    when_to_use:
+      'Inbound leads arrive via a web form, email or DM and are answered manually, in business hours, '
+      + 'with no stated or enforced response time.',
+    problem_categories: ['lead_response', 'lead_capture'],
+    impact_driver: 'lead_response',
+    build_days: 3,
+    integrations: ['Website form webhook', 'SMS (Telnyx/Twilio)', 'Email', 'CRM', 'Calendar'],
+    steps: [
+      step('trigger', 'Capture the lead', 'trigger',
+        'Website form / email parser / DM webhook posts the lead into the workflow within seconds of submission.',
+        'Website form webhook', ['WEBHOOK_URL', 'FORM_FIELD_MAP'],
+        'Submit the real form on the client site with a test name.',
+        'Execution starts in under 10s and the payload carries name, phone, message.'),
+      step('instant_reply', 'Instant acknowledgement', 'system',
+        'Send an SMS and email within 60 seconds naming the service the lead asked about.',
+        'SMS (Telnyx/Twilio)', ['SENDER_NUMBER', 'ACK_TEMPLATE'],
+        'Submit a test lead with your own mobile number.',
+        'SMS arrives in under 60s and quotes the requested service.'),
+      step('qualify', 'AI qualification', 'ai',
+        'Two-way conversation collecting the qualification fields the client actually sells on '
+        + '(job type, location, timeline, budget band). Stops after 4 questions.',
+        'Anthropic', ['QUALIFY_FIELDS', 'MAX_TURNS'],
+        'Reply to the SMS with a vague answer, then a specific one.',
+        'Agent asks a clarifying question, then extracts fields into structured JSON.'),
+      step('crm', 'Write to CRM', 'system',
+        'Create or update the contact with qualification fields, score and full transcript.',
+        'CRM', ['CRM_PIPELINE_ID', 'FIELD_MAP'],
+        'Check the CRM record after the test conversation.',
+        'Contact exists once (no duplicate) with all captured fields.'),
+      step('book', 'Offer booking', 'system',
+        'Qualified leads get 3 concrete slots from the live calendar; picking one writes the event.',
+        'Calendar', ['CALENDAR_ID', 'SLOT_RULES'],
+        'Answer the qualification questions as a good-fit lead.',
+        'Three real free slots offered; choosing one creates a calendar event.'),
+      step('followup', 'Follow-up ladder', 'system',
+        'No reply → follow up at +1h, +24h, +72h, then stop. Any reply cancels the ladder.',
+        'SMS (Telnyx/Twilio)', ['FOLLOWUP_SCHEDULE'],
+        'Leave a test lead unanswered.',
+        'Exactly three follow-ups fire on schedule, and none after a reply.'),
+      step('handoff', 'Human handoff', 'human',
+        'Complaint, pricing negotiation, out-of-scope job or two failed AI turns → hand to a human with the transcript.',
+        'Email/Slack', ['HANDOFF_CHANNEL', 'HANDOFF_RULES'],
+        'Reply with "I want to speak to someone".',
+        'Handoff notification fires within 1 min and the agent stops messaging.'),
+    ],
+    credentials: [...SMS_CREDS, LLM_CRED, CRM_CRED,
+      cred('calendar', 'CALENDAR_API_KEY', 'Read availability, create events'),
+      cred('email', 'EMAIL_API_KEY', 'Transactional email sending')],
+    human_handoff: {
+      triggers: ['explicit request for a human', 'complaint or negative sentiment', 'price negotiation',
+        'out-of-scope request', 'two consecutive failed AI turns'],
+      route_to: 'owner mobile + shared inbox',
+      sla: 'notify within 1 minute, human replies within business hours',
+    },
+    guardrails: [
+      'Never invent prices, availability or guarantees — quote only from the configured price list.',
+      'Identify as an assistant on first contact.',
+      'Honour STOP/unsubscribe immediately and permanently.',
+      'Never send between 21:00 and 08:00 local time; queue instead.',
+    ],
+  },
+  {
+    key: 'ai_receptionist',
+    letter: 'B',
+    name: 'AI Receptionist / Booking',
+    when_to_use:
+      'Booking happens by phone or by a form that a human has to read, and the calendar is the bottleneck. '
+      + 'Site shows opening hours but no online booking.',
+    problem_categories: ['booking', 'lead_capture'],
+    impact_driver: 'booking',
+    build_days: 4,
+    integrations: ['Voice (Telnyx/Twilio)', 'Calendar', 'SMS', 'CRM'],
+    steps: [
+      step('trigger', 'Answer the call', 'trigger',
+        'Inbound call is answered by the voice agent after 3 rings, or immediately outside opening hours.',
+        'Voice (Telnyx/Twilio)', ['INBOUND_NUMBER', 'RING_DELAY'],
+        'Call the number outside opening hours.',
+        'Agent answers, states it is an assistant, and offers to book.'),
+      step('intent', 'Identify intent + service', 'ai',
+        'Classify: new booking / reschedule / question / emergency, and which service.',
+        'Anthropic', ['SERVICE_LIST', 'INTENT_RULES'],
+        'Call and say "I need to reschedule Thursday".',
+        'Intent = reschedule, existing booking located.'),
+      step('availability', 'Read live availability', 'system',
+        'Fetch real free slots honouring service duration, buffers and staff assignment.',
+        'Calendar', ['CALENDAR_ID', 'SERVICE_DURATIONS', 'BUFFER_MINUTES'],
+        'Block the calendar, then ask for that time.',
+        'Blocked slot is never offered.'),
+      step('book', 'Create the booking', 'system',
+        'Write the event, send SMS confirmation with a reschedule link.',
+        'Calendar', ['CONFIRMATION_TEMPLATE'],
+        'Complete a booking end to end.',
+        'Event in calendar + confirmation SMS with working link.'),
+      step('reminder', 'Reduce no-shows', 'system',
+        'Reminder at −24h and −2h; a "C" reply cancels and frees the slot.',
+        'SMS', ['REMINDER_SCHEDULE'],
+        'Book a slot 25h out and wait for the reminder.',
+        'Reminder fires at −24h; cancel reply frees the slot.'),
+      step('handoff', 'Human handoff', 'human',
+        'Emergency, complaint, or anything outside the service list transfers to a human or takes a callback.',
+        'Voice', ['TRANSFER_NUMBER', 'EMERGENCY_KEYWORDS'],
+        'Say "this is an emergency".',
+        'Call transfers or a priority callback task is created within 1 min.'),
+    ],
+    credentials: [...SMS_CREDS, LLM_CRED,
+      cred('telnyx', 'TELNYX_VOICE_APP_ID', 'Inbound voice application'),
+      cred('calendar', 'CALENDAR_API_KEY', 'Read availability, create events')],
+    human_handoff: {
+      triggers: ['emergency keywords', 'complaint', 'service not in the list', 'caller asks for a person'],
+      route_to: 'transfer to reception, fallback to callback task',
+      sla: 'transfer immediately, callback within 30 minutes in hours',
+    },
+    guardrails: [
+      'Never book outside real calendar availability.',
+      'Never give clinical, legal or safety advice — route to a human.',
+      'Announce recording where local law requires it.',
+      'Confirm the spelling of name and phone before writing the booking.',
+    ],
+  },
+  {
+    key: 'missed_call_sms',
+    letter: 'C',
+    name: 'Missed Call → SMS',
+    when_to_use:
+      'The site pushes a phone number as the main way to reach the business, and calls go unanswered '
+      + 'while staff are on a job, with a customer, or after hours.',
+    problem_categories: ['lead_response', 'lead_capture'],
+    impact_driver: 'recovery',
+    build_days: 1,
+    integrations: ['Voice (Telnyx/Twilio)', 'SMS', 'CRM'],
+    steps: [
+      step('trigger', 'Detect the missed call', 'trigger',
+        'Call ends unanswered, busy or voicemail → fire the workflow with the caller number.',
+        'Voice (Telnyx/Twilio)', ['TRACKED_NUMBERS'],
+        'Call the business number and hang up after 5 rings.',
+        'Workflow fires within 30s carrying the caller ID.'),
+      step('sms', 'Text back in under 2 minutes', 'system',
+        'SMS from the business number: apologise, name the business, ask what they need.',
+        'SMS', ['SENDER_NUMBER', 'TEXTBACK_TEMPLATE'],
+        'Miss a call from your own mobile.',
+        'SMS arrives within 2 min from the same number that was called.'),
+      step('capture', 'Capture the request', 'ai',
+        'Short SMS thread: what they need, where, when. Max 3 questions.',
+        'Anthropic', ['CAPTURE_FIELDS'],
+        'Reply describing a job.',
+        'Structured job record with service, location and urgency.'),
+      step('crm', 'Log and alert', 'system',
+        'Create the CRM lead and notify whoever handles callbacks.',
+        'CRM', ['CRM_PIPELINE_ID', 'ALERT_CHANNEL'],
+        'Complete an SMS thread.',
+        'Lead in CRM, alert delivered, no duplicate for repeat calls same day.'),
+      step('handoff', 'Human callback', 'human',
+        'Urgent or high-value jobs are flagged for immediate callback rather than SMS ping-pong.',
+        'Email/Slack', ['URGENCY_RULES'],
+        'Say "burst pipe, water everywhere".',
+        'Flagged urgent, human alerted within 1 min.'),
+    ],
+    credentials: [...SMS_CREDS, LLM_CRED, CRM_CRED],
+    human_handoff: {
+      triggers: ['urgency keywords', 'repeat caller within 24h', 'customer asks to be called'],
+      route_to: 'owner mobile',
+      sla: 'alert within 1 minute',
+    },
+    guardrails: [
+      'Send from the same number the customer dialled, or the text reads as spam.',
+      'One text-back per caller per 24h.',
+      'Respect quiet hours; queue overnight misses to 08:00.',
+    ],
+  },
+  {
+    key: 'lead_followup',
+    letter: 'D',
+    name: 'Lead Follow-up / Reactivation',
+    when_to_use:
+      'There is a backlog of old enquiries or past customers and no systematic follow-up. '
+      + 'Typically visible as a long service list with no repeat-purchase mechanism.',
+    problem_categories: ['follow_up'],
+    impact_driver: 'recovery',
+    build_days: 2,
+    integrations: ['CRM', 'SMS', 'Email'],
+    steps: [
+      step('trigger', 'Scheduled batch start', 'trigger',
+        'A schedule (weekly by default) or a manual "run reactivation" action starts one batch.',
+        'CRM', ['SCHEDULE_CRON', 'BATCH_SIZE'],
+        'Trigger one batch manually.',
+        'Exactly one batch starts and is visible in the execution log.'),
+      step('segment', 'Segment the dormant list', 'system',
+        'Pull contacts with no activity in N days, exclude opted-out, lost-for-cause and active deals.',
+        'CRM', ['DORMANT_DAYS', 'EXCLUSION_RULES'],
+        'Run against a copy of the list.',
+        'Segment excludes every opted-out and active contact.'),
+      step('personalise', 'Personalise per contact', 'ai',
+        'Reference the actual service they enquired about; no generic "just checking in".',
+        'Anthropic', ['TONE', 'OFFER'],
+        'Inspect 10 generated messages.',
+        'Each names a real service or past job; no two are identical.'),
+      step('throttle', 'Throttled send', 'system',
+        'Cap daily volume, spread across the day, stop the batch on the first delivery-failure spike.',
+        'SMS', ['DAILY_CAP', 'SEND_WINDOW'],
+        'Run a 20-contact batch.',
+        'Sends stay under the cap and inside the window.'),
+      step('route', 'Route the replies', 'ai',
+        'Classify replies: interested / not now / opt-out / complaint, and act on each.',
+        'Anthropic', ['REPLY_RULES'],
+        'Reply "not interested" and "stop".',
+        '"Stop" opts out permanently; "not interested" is logged and closed.'),
+      step('handoff', 'Hand interested leads over', 'human',
+        'Interested replies go to a human with the full history attached.',
+        'Email/Slack', ['HANDOFF_CHANNEL'],
+        'Reply "yes, call me".',
+        'Human notified within 1 min with history.'),
+    ],
+    credentials: [...SMS_CREDS, LLM_CRED, CRM_CRED,
+      cred('email', 'EMAIL_API_KEY', 'Transactional email sending')],
+    human_handoff: {
+      triggers: ['interested reply', 'complaint', 'question the agent cannot answer from the price list'],
+      route_to: 'sales owner',
+      sla: 'within 1 hour in business hours',
+    },
+    guardrails: [
+      'Only contact people with a prior business relationship, and record the lawful basis (GDPR).',
+      'Every message carries a working opt-out; opt-outs are permanent and global.',
+      'Hard daily cap — reactivation is not a broadcast channel.',
+    ],
+  },
+  {
+    key: 'quote_followup',
+    letter: 'E',
+    name: 'Quote Follow-up',
+    when_to_use:
+      'The business sends quotes, estimates or proposals and chases them by memory. '
+      + 'Visible when the site pushes "request a quote" as the main call to action.',
+    problem_categories: ['quoting', 'follow_up'],
+    impact_driver: 'recovery',
+    build_days: 2,
+    integrations: ['CRM', 'Email', 'SMS'],
+    steps: [
+      step('trigger', 'Quote sent', 'trigger',
+        'Quote leaving the CRM/accounting tool starts a follow-up timer.',
+        'CRM', ['QUOTE_STAGE_ID'],
+        'Move a test deal to "quote sent".',
+        'Timer starts and is visible on the deal.'),
+      step('ladder', 'Timed follow-up ladder', 'system',
+        'Day 2 email, day 5 SMS, day 10 last call — each referencing the actual quoted job and amount.',
+        'Email', ['LADDER_SCHEDULE', 'QUOTE_FIELD_MAP'],
+        'Send a test quote and advance the clock.',
+        'Each message quotes the right job and amount.'),
+      step('objection', 'Handle the answer', 'ai',
+        'Classify: accepted / too expensive / timing / went elsewhere, and respond per the client\'s rules.',
+        'Anthropic', ['OBJECTION_PLAYBOOK'],
+        'Reply "too expensive".',
+        'Configured response fires; no unauthorised discount is offered.'),
+      step('close', 'Close the loop', 'system',
+        'Update the deal stage and stop the ladder on any outcome.',
+        'CRM', ['STAGE_MAP'],
+        'Reply "we went with someone else".',
+        'Deal marked lost with reason; no further messages.'),
+      step('handoff', 'Human handoff', 'human',
+        'Any negotiation or scope change goes to a human.',
+        'Email/Slack', ['HANDOFF_CHANNEL'],
+        'Reply "can you do it for 20% less".',
+        'Handoff fires; agent does not negotiate.'),
+    ],
+    credentials: [LLM_CRED, CRM_CRED, ...SMS_CREDS,
+      cred('email', 'EMAIL_API_KEY', 'Transactional email sending')],
+    human_handoff: {
+      triggers: ['price negotiation', 'scope change', 'complaint'],
+      route_to: 'quote owner',
+      sla: 'same business day',
+    },
+    guardrails: [
+      'Never discount without explicit authorisation in the playbook.',
+      'Maximum three follow-ups per quote.',
+      'Never restate a quote amount that is not read live from the CRM record.',
+    ],
+  },
+  {
+    key: 'review_request',
+    letter: 'F',
+    name: 'Review Request',
+    when_to_use:
+      'Reviews visibly drive purchase in this vertical and the business has few or stale reviews '
+      + 'relative to the volume of work implied by the site.',
+    problem_categories: ['reputation'],
+    impact_driver: 'reputation',
+    build_days: 1,
+    integrations: ['CRM', 'SMS', 'Google Business Profile'],
+    steps: [
+      step('trigger', 'Job completed', 'trigger',
+        'Job/appointment marked complete starts a delay timer.',
+        'CRM', ['COMPLETION_STAGE_ID', 'DELAY_HOURS'],
+        'Complete a test job.',
+        'Timer starts; request is not sent immediately.'),
+      step('screen', 'Ask before asking', 'ai',
+        'One-question satisfaction check first; only happy customers get the public review link.',
+        'Anthropic', ['SCREEN_QUESTION'],
+        'Answer negatively.',
+        'No review link sent; service-recovery path taken instead.'),
+      step('ask', 'Send the review link', 'system',
+        'Direct deep link to the review form, personalised with the technician and job.',
+        'Google Business Profile', ['REVIEW_LINK', 'ASK_TEMPLATE'],
+        'Answer positively.',
+        'Link opens the review form directly, prefilled where supported.'),
+      step('recover', 'Service recovery', 'human',
+        'Unhappy customers route to the owner before anything is published.',
+        'Email/Slack', ['RECOVERY_CHANNEL'],
+        'Answer "not happy".',
+        'Owner notified within 1 min with the job details.'),
+      step('report', 'Track the result', 'system',
+        'Log sent / opened / reviewed per job for a weekly rollup.',
+        'CRM', ['REPORT_SCHEDULE'],
+        'Run a week of test jobs.',
+        'Rollup counts match the executions log.'),
+    ],
+    credentials: [...SMS_CREDS, LLM_CRED, CRM_CRED,
+      cred('google', 'GOOGLE_BUSINESS_API_KEY', 'Read review counts (optional)', null, false)],
+    human_handoff: {
+      triggers: ['negative satisfaction answer', 'complaint', 'any mention of harm or safety'],
+      route_to: 'owner',
+      sla: 'within 1 minute',
+    },
+    guardrails: [
+      'Never offer an incentive in exchange for a review.',
+      'Never suppress a negative review — route it, do not block it.',
+      'One request per completed job, maximum one reminder.',
+    ],
+  },
+  {
+    key: 'support_faq',
+    letter: 'G',
+    name: 'Customer Support / FAQ',
+    when_to_use:
+      'The site carries a substantial FAQ / opening hours / policy content, implying the same questions '
+      + 'arrive by phone and email all day.',
+    problem_categories: ['support'],
+    impact_driver: 'admin_time',
+    build_days: 3,
+    integrations: ['Website widget', 'Email', 'Knowledge base'],
+    steps: [
+      step('trigger', 'Question arrives', 'trigger',
+        'A question submitted through the site widget or sent to the support inbox starts the workflow.',
+        'Website widget', ['WIDGET_ID', 'SUPPORT_INBOX'],
+        'Send a question through the widget and one by email.',
+        'Both start an execution and carry the question text.'),
+      step('ingest', 'Build the knowledge base', 'system',
+        'Ingest the client\'s real pages and documents; every answer must cite a source.',
+        'Knowledge base', ['SOURCE_URLS', 'REFRESH_SCHEDULE'],
+        'Ask something answered only in a deep page.',
+        'Correct answer with a link to the source page.'),
+      step('answer', 'Answer with citations', 'ai',
+        'Answer only from the knowledge base; refuse and hand off when unsupported.',
+        'Anthropic', ['REFUSAL_RULES', 'TONE'],
+        'Ask a question the site does not answer.',
+        'Agent says it does not know and offers a human — no invention.'),
+      step('deflect', 'Deflect or escalate', 'system',
+        'Resolved conversations close; unresolved ones become tickets with the transcript.',
+        'Email', ['TICKET_INBOX'],
+        'Ask an unanswerable question.',
+        'Ticket created with full transcript.'),
+      step('gap', 'Report content gaps', 'system',
+        'Weekly list of questions the knowledge base could not answer.',
+        'Knowledge base', ['GAP_REPORT_SCHEDULE'],
+        'Ask three unanswerable questions.',
+        'All three appear in the gap report.'),
+      step('handoff', 'Human handoff', 'human',
+        'Complaints, refunds, account changes and anything with a money impact go to a human.',
+        'Email/Slack', ['HANDOFF_RULES'],
+        'Ask for a refund.',
+        'Immediate handoff; agent makes no promise.'),
+    ],
+    credentials: [LLM_CRED,
+      cred('email', 'EMAIL_API_KEY', 'Ticket creation + replies'),
+      cred('kb', 'KB_STORAGE_URL', 'Where the ingested content lives')],
+    human_handoff: {
+      triggers: ['refund or money', 'complaint', 'account or data change', 'no supported answer'],
+      route_to: 'support inbox',
+      sla: 'next business hour',
+    },
+    guardrails: [
+      'Answers must cite a source page; no source, no answer.',
+      'Never promise a refund, discount or delivery date.',
+      'Escalate anything touching health, legal or safety.',
+    ],
+  },
+  {
+    key: 'internal_admin',
+    letter: 'H',
+    name: 'Internal Admin / Data Entry',
+    when_to_use:
+      'Structured information arrives as email, PDF or form and a human retypes it into another system. '
+      + 'Visible as "send us your details / documents and we will process it" flows.',
+    problem_categories: ['internal_admin'],
+    impact_driver: 'admin_time',
+    build_days: 3,
+    integrations: ['Email inbox', 'Document parser', 'Target system (CRM/ERP/Sheets)'],
+    steps: [
+      step('trigger', 'Watch the inbox', 'trigger',
+        'New matching email or upload starts the workflow.',
+        'Email inbox', ['WATCH_FOLDER', 'MATCH_RULES'],
+        'Send a matching and a non-matching email.',
+        'Only the matching one fires.'),
+      step('extract', 'Extract structured fields', 'ai',
+        'Pull the defined fields from body/attachment, each with a confidence value.',
+        'Anthropic', ['FIELD_SCHEMA', 'CONFIDENCE_THRESHOLD'],
+        'Run 10 real historical documents.',
+        'Field-level accuracy measured and recorded before go-live.'),
+      step('validate', 'Validate before writing', 'system',
+        'Type, format and duplicate checks; anything below threshold goes to review.',
+        'Target system (CRM/ERP/Sheets)', ['VALIDATION_RULES'],
+        'Feed a document with a broken date.',
+        'Rejected to review, nothing written.'),
+      step('write', 'Write to the target system', 'system',
+        'Idempotent write keyed on a natural id so a re-run cannot duplicate.',
+        'Target system (CRM/ERP/Sheets)', ['TARGET_TABLE', 'IDEMPOTENCY_KEY'],
+        'Process the same document twice.',
+        'Exactly one record exists.'),
+      step('review', 'Human review queue', 'human',
+        'Low-confidence extractions land in a queue with the source document side by side.',
+        'Email/Slack', ['REVIEW_QUEUE'],
+        'Feed a deliberately blurry document.',
+        'Appears in the queue with the original attached.'),
+    ],
+    credentials: [LLM_CRED,
+      cred('email', 'EMAIL_API_KEY', 'Inbox watch + notifications'),
+      cred('target', 'TARGET_SYSTEM_API_KEY', 'Write extracted records')],
+    human_handoff: {
+      triggers: ['confidence below threshold', 'validation failure', 'unknown document type'],
+      route_to: 'admin review queue',
+      sla: 'same business day',
+    },
+    guardrails: [
+      'Never write below the confidence threshold — queue it.',
+      'Every write is idempotent and reversible.',
+      'Keep the source document linked to the record for audit.',
+    ],
+  },
+];
+
+export const TEMPLATE_KEYS = TEMPLATES.map((t) => t.key);
+
+export function getTemplate(key: string): AgentTemplate | undefined {
+  return TEMPLATES.find((t) => t.key === key);
+}
+
+/** Compact catalogue handed to the model during the audit. */
+export function templateCatalogueForPrompt(): string {
+  return TEMPLATES.map(
+    (t) => `${t.letter}. key=${t.key} — ${t.name}\n   use when: ${t.when_to_use}\n   integrations: ${t.integrations.join(', ')}\n   typical build: ${t.build_days} day(s)`,
+  ).join('\n');
+}

@@ -1,0 +1,31 @@
+{
+  "name": "automation-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Internal AI Automation Agency OS: business audit -> automation proposal -> personalized demo -> outreach -> client agent blueprint.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "db:push": "tsx scripts/db-push.ts",
+    "pipeline": "tsx scripts/pipeline.ts",
+    "test:e2e": "tsx --tsconfig tsconfig.json scripts/run-e2e.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "next": "15.5.4",
+    "pg": "^8.13.1",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

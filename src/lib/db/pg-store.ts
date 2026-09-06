@@ -1,0 +1,316 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { Pool } from 'pg';
+import type {
+  Agent, Audit, Client, Demo, Execution, Lead, LeadStage, OutreachMessage, Snapshot,
+} from '@/lib/types';
+import type { LeadFilter, Store } from './store';
+
+const num = (v: unknown): number => (v === null || v === undefined ? 0 : Number(v));
+const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
+
+export class PgStore implements Store {
+  private pool: Pool;
+  private ready = false;
+
+  constructor(connectionString = process.env.DATABASE_URL) {
+    if (!connectionString) throw new Error('DATABASE_URL is required for PgStore');
+    this.pool = new Pool({
+      connectionString,
+      ssl: connectionString.includes('localhost') ? undefined : { rejectUnauthorized: false },
+    });
+  }
+
+  async init() {
+    if (this.ready) return;
+    const sql = await readFile(join(process.cwd(), 'supabase/migrations/0001_init.sql'), 'utf8');
+    await this.pool.query(sql);
+    this.ready = true;
+  }
+
+  async close() {
+    await this.pool.end();
+  }
+
+  private static lead(r: Record<string, unknown>): Lead {
+    return {
+      id: String(r.id),
+      company_name: String(r.company_name),
+      website: String(r.website),
+      industry: (r.industry as string) ?? null,
+      country: (r.country as string) ?? null,
+      size_hint: (r.size_hint as string) ?? null,
+      stage: r.stage as LeadStage,
+      contacts: (r.contacts as Lead['contacts']) ?? [],
+      socials: (r.socials as Lead['socials']) ?? [],
+      notes: (r.notes as string) ?? null,
+      source: String(r.source),
+      created_at: iso(r.created_at),
+      updated_at: iso(r.updated_at),
+    };
+  }
+
+  async upsertLead(input: Omit<Lead, 'id' | 'created_at' | 'updated_at'> & { id?: string }): Promise<Lead> {
+    const { rows } = await this.pool.query(
+      `insert into leads (company_name, website, industry, country, size_hint, stage, contacts, socials, notes, source)
+       values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10)
+       on conflict (lower(website)) do update set
+         company_name = excluded.company_name,
+         industry     = coalesce(excluded.industry, leads.industry),
+         country      = coalesce(excluded.country, leads.country),
+         size_hint    = coalesce(excluded.size_hint, leads.size_hint),
+         contacts     = excluded.contacts,
+         socials      = excluded.socials,
+         notes        = coalesce(excluded.notes, leads.notes),
+         updated_at   = now()
+       returning *`,
+      [input.company_name, input.website, input.industry, input.country, input.size_hint,
+        input.stage, JSON.stringify(input.contacts), JSON.stringify(input.socials), input.notes, input.source],
+    );
+    return PgStore.lead(rows[0]);
+  }
+
+  async getLead(id: string) {
+    const { rows } = await this.pool.query('select * from leads where id = $1', [id]);
+    return rows[0] ? PgStore.lead(rows[0]) : null;
+  }
+
+  async findLeadByWebsite(website: string) {
+    const { rows } = await this.pool.query('select * from leads where lower(website) = lower($1)', [website]);
+    return rows[0] ? PgStore.lead(rows[0]) : null;
+  }
+
+  async listLeads(filter: LeadFilter = {}) {
+    const { rows } = await this.pool.query(
+      `select * from leads
+        where ($1::text is null or company_name ilike '%'||$1||'%' or website ilike '%'||$1||'%')
+          and ($2::text is null or stage = $2)
+          and ($3::text is null or industry = $3)
+          and ($4::text is null or country = $4)
+        order by created_at desc`,
+      [filter.q ?? null, filter.stage ?? null, filter.industry ?? null, filter.country ?? null],
+    );
+    return rows.map(PgStore.lead);
+  }
+
+  async setLeadStage(id: string, stage: LeadStage) {
+    const { rows } = await this.pool.query(
+      'update leads set stage = $2, updated_at = now() where id = $1 returning *', [id, stage]);
+    if (!rows[0]) throw new Error(`lead ${id} not found`);
+    return PgStore.lead(rows[0]);
+  }
+
+  async insertSnapshot(s: Omit<Snapshot, 'id'>) {
+    const { rows } = await this.pool.query(
+      `insert into snapshots (lead_id, root_url, pages, signals, fetched_at)
+       values ($1,$2,$3::jsonb,$4::jsonb,$5) returning *`,
+      [s.lead_id, s.root_url, JSON.stringify(s.pages), JSON.stringify(s.signals), s.fetched_at]);
+    return { ...s, id: String(rows[0].id) };
+  }
+
+  async latestSnapshot(leadId: string) {
+    const { rows } = await this.pool.query(
+      'select * from snapshots where lead_id = $1 order by fetched_at desc limit 1', [leadId]);
+    if (!rows[0]) return null;
+    const r = rows[0];
+    return {
+      id: String(r.id), lead_id: String(r.lead_id), root_url: String(r.root_url),
+      pages: r.pages, signals: r.signals, fetched_at: iso(r.fetched_at),
+    } as Snapshot;
+  }
+
+  async insertAudit(a: Omit<Audit, 'id'>) {
+    const { rows } = await this.pool.query(
+      `insert into audits (lead_id, snapshot_id, model, status, result, gate_report, error, created_at)
+       values ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8) returning id`,
+      [a.lead_id, a.snapshot_id, a.model, a.status, a.result ? JSON.stringify(a.result) : null,
+        JSON.stringify(a.gate_report), a.error, a.created_at]);
+    return { ...a, id: String(rows[0].id) };
+  }
+
+  private static audit(r: Record<string, unknown>): Audit {
+    return {
+      id: String(r.id), lead_id: String(r.lead_id), snapshot_id: String(r.snapshot_id),
+      model: String(r.model), status: r.status as Audit['status'],
+      result: (r.result as Audit['result']) ?? null,
+      gate_report: (r.gate_report as string[]) ?? [],
+      error: (r.error as string) ?? null, created_at: iso(r.created_at),
+    };
+  }
+
+  async getAudit(id: string) {
+    const { rows } = await this.pool.query('select * from audits where id = $1', [id]);
+    return rows[0] ? PgStore.audit(rows[0]) : null;
+  }
+
+  async latestAudit(leadId: string) {
+    const { rows } = await this.pool.query(
+      'select * from audits where lead_id = $1 order by created_at desc limit 1', [leadId]);
+    return rows[0] ? PgStore.audit(rows[0]) : null;
+  }
+
+  async insertDemo(d: Omit<Demo, 'id'>) {
+    const { rows } = await this.pool.query(
+      `insert into demos (audit_id, lead_id, headline, before_state, after_state, scenes, impact, impact_inputs, created_at)
+       values ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9) returning id`,
+      [d.audit_id, d.lead_id, d.headline, JSON.stringify(d.before), JSON.stringify(d.after),
+        JSON.stringify(d.scenes), JSON.stringify(d.impact), JSON.stringify(d.impact_inputs), d.created_at]);
+    return { ...d, id: String(rows[0].id) };
+  }
+
+  async latestDemo(leadId: string) {
+    const { rows } = await this.pool.query(
+      'select * from demos where lead_id = $1 order by created_at desc limit 1', [leadId]);
+    if (!rows[0]) return null;
+    const r = rows[0];
+    return {
+      id: String(r.id), audit_id: String(r.audit_id), lead_id: String(r.lead_id),
+      headline: String(r.headline), before: r.before_state, after: r.after_state,
+      scenes: r.scenes, impact: r.impact, impact_inputs: r.impact_inputs,
+      created_at: iso(r.created_at),
+    } as Demo;
+  }
+
+  private static outreach(r: Record<string, unknown>): OutreachMessage {
+    return {
+      id: String(r.id), lead_id: String(r.lead_id), audit_id: String(r.audit_id),
+      channel: r.channel as OutreachMessage['channel'], step: Number(r.step),
+      subject: (r.subject as string) ?? null, body: String(r.body),
+      status: r.status as OutreachMessage['status'], grounding: (r.grounding as string[]) ?? [],
+      approved_at: r.approved_at ? iso(r.approved_at) : null,
+      sent_at: r.sent_at ? iso(r.sent_at) : null, created_at: iso(r.created_at),
+    };
+  }
+
+  async insertOutreach(m: Omit<OutreachMessage, 'id'>) {
+    const { rows } = await this.pool.query(
+      `insert into outreach_messages (lead_id, audit_id, channel, step, subject, body, status, grounding, created_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9) returning *`,
+      [m.lead_id, m.audit_id, m.channel, m.step, m.subject, m.body, m.status,
+        JSON.stringify(m.grounding), m.created_at]);
+    return PgStore.outreach(rows[0]);
+  }
+
+  async listOutreach(leadId: string) {
+    const { rows } = await this.pool.query(
+      'select * from outreach_messages where lead_id = $1 order by step asc', [leadId]);
+    return rows.map(PgStore.outreach);
+  }
+
+  async setOutreachStatus(id: string, status: OutreachMessage['status']) {
+    const { rows } = await this.pool.query(
+      `update outreach_messages set status = $2,
+         approved_at = case when $2 = 'approved' then now() else approved_at end,
+         sent_at     = case when $2 = 'sent'     then now() else sent_at end
+       where id = $1 returning *`, [id, status]);
+    if (!rows[0]) throw new Error(`outreach ${id} not found`);
+    return PgStore.outreach(rows[0]);
+  }
+
+  private static client(r: Record<string, unknown>): Client {
+    return {
+      id: String(r.id), lead_id: (r.lead_id as string) ?? null, name: String(r.name),
+      country: (r.country as string) ?? null,
+      build_fee_eur: r.build_fee_eur === null ? null : num(r.build_fee_eur),
+      monthly_fee_eur: r.monthly_fee_eur === null ? null : num(r.monthly_fee_eur),
+      stripe_customer_id: (r.stripe_customer_id as string) ?? null,
+      created_at: iso(r.created_at),
+    };
+  }
+
+  async insertClient(c: Omit<Client, 'id' | 'created_at'>) {
+    const { rows } = await this.pool.query(
+      `insert into clients (lead_id, name, country, build_fee_eur, monthly_fee_eur, stripe_customer_id)
+       values ($1,$2,$3,$4,$5,$6) returning *`,
+      [c.lead_id, c.name, c.country, c.build_fee_eur, c.monthly_fee_eur, c.stripe_customer_id]);
+    return PgStore.client(rows[0]);
+  }
+
+  async listClients() {
+    const { rows } = await this.pool.query('select * from clients order by created_at desc');
+    return rows.map(PgStore.client);
+  }
+
+  async getClient(id: string) {
+    const { rows } = await this.pool.query('select * from clients where id = $1', [id]);
+    return rows[0] ? PgStore.client(rows[0]) : null;
+  }
+
+  private static agent(r: Record<string, unknown>): Agent {
+    return {
+      id: String(r.id), client_id: String(r.client_id), name: String(r.name),
+      template_key: String(r.template_key), status: r.status as Agent['status'],
+      blueprint: r.blueprint as Agent['blueprint'], created_at: iso(r.created_at),
+    };
+  }
+
+  async insertAgent(a: Omit<Agent, 'id' | 'created_at'>) {
+    const { rows } = await this.pool.query(
+      `insert into agents (client_id, name, template_key, status, blueprint)
+       values ($1,$2,$3,$4,$5::jsonb) returning *`,
+      [a.client_id, a.name, a.template_key, a.status, JSON.stringify(a.blueprint)]);
+    const agent = PgStore.agent(rows[0]);
+    // Mirror credential references (names only, never values) for checklist queries.
+    for (const c of a.blueprint.credentials) {
+      await this.pool.query(
+        `insert into agent_credentials (agent_id, provider, env_var, scope, required, status, docs_url)
+         values ($1,$2,$3,$4,$5,$6,$7) on conflict (agent_id, env_var) do nothing`,
+        [agent.id, c.provider, c.env_var, c.scope, c.required, c.status, c.docs_url]);
+    }
+    return agent;
+  }
+
+  async getAgent(id: string) {
+    const { rows } = await this.pool.query('select * from agents where id = $1', [id]);
+    return rows[0] ? PgStore.agent(rows[0]) : null;
+  }
+
+  async listAgents(clientId?: string) {
+    const { rows } = await this.pool.query(
+      'select * from agents where ($1::uuid is null or client_id = $1) order by created_at desc',
+      [clientId ?? null]);
+    return rows.map(PgStore.agent);
+  }
+
+  async updateAgent(id: string, patch: Partial<Pick<Agent, 'status' | 'blueprint' | 'name'>>) {
+    const { rows } = await this.pool.query(
+      `update agents set
+         status    = coalesce($2, status),
+         name      = coalesce($3, name),
+         blueprint = coalesce($4::jsonb, blueprint)
+       where id = $1 returning *`,
+      [id, patch.status ?? null, patch.name ?? null, patch.blueprint ? JSON.stringify(patch.blueprint) : null]);
+    if (!rows[0]) throw new Error(`agent ${id} not found`);
+    return PgStore.agent(rows[0]);
+  }
+
+  private static execution(r: Record<string, unknown>): Execution {
+    return {
+      id: String(r.id), agent_id: String(r.agent_id), status: r.status as Execution['status'],
+      outcome: r.outcome as Execution['outcome'], minutes_saved: num(r.minutes_saved),
+      revenue_influenced_eur: num(r.revenue_influenced_eur),
+      error: (r.error as string) ?? null, started_at: iso(r.started_at),
+    };
+  }
+
+  async insertExecution(e: Omit<Execution, 'id'>) {
+    const { rows } = await this.pool.query(
+      `insert into executions (agent_id, status, outcome, minutes_saved, revenue_influenced_eur, error, started_at)
+       values ($1,$2,$3::jsonb,$4,$5,$6,$7) returning *`,
+      [e.agent_id, e.status, JSON.stringify(e.outcome), e.minutes_saved,
+        e.revenue_influenced_eur, e.error, e.started_at]);
+    return PgStore.execution(rows[0]);
+  }
+
+  async listExecutions(agentId: string, limit = 100) {
+    const { rows } = await this.pool.query(
+      'select * from executions where agent_id = $1 order by started_at desc limit $2', [agentId, limit]);
+    return rows.map(PgStore.execution);
+  }
+
+  async listExecutionsForClient(clientId: string) {
+    const { rows } = await this.pool.query(
+      `select e.* from executions e join agents a on a.id = e.agent_id where a.client_id = $1`, [clientId]);
+    return rows.map(PgStore.execution);
+  }
+}
