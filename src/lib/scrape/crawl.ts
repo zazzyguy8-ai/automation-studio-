@@ -4,6 +4,16 @@ import { detectSignals } from './signals';
 
 export type Fetcher = (url: string) => Promise<{ status: number; html: string }>;
 
+/** The root page could not be read. Distinct from "the page was read and had
+ *  little on it" - a 403 from bot protection or a proxy must never be reported
+ *  to the operator as an empty business website. */
+export class CrawlError extends Error {
+  constructor(message: string, readonly status: number, readonly url: string) {
+    super(message);
+    this.name = 'CrawlError';
+  }
+}
+
 export interface CrawlOptions {
   maxPages?: number;
   timeoutMs?: number;
@@ -51,6 +61,15 @@ export async function crawlSite(
   const rawHtml: string[] = [];
 
   const root = await fetcher(rootUrl);
+  // Fail loudly here. Everything downstream treats an empty page as "this
+  // business publishes nothing", which is a very different claim from "we were
+  // not allowed to read it".
+  if (root.status < 200 || root.status >= 300) {
+    throw new CrawlError(`${rootUrl} returned HTTP ${root.status}`, root.status, rootUrl);
+  }
+  if (root.html.trim().length === 0) {
+    throw new CrawlError(`${rootUrl} returned an empty response body`, root.status, rootUrl);
+  }
   rawHtml.push(root.html);
   pages.push({
     url: rootUrl,

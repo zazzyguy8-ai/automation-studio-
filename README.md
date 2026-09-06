@@ -130,10 +130,38 @@ visible rather than silently degraded.
 | `npm run pipeline -- <url>` | URL → full proposal in the terminal |
 | `npm run pipeline -- --fixture <name>` | Offline demo run |
 | `npm run seed` | Populate the local store |
-| `npm run test:e2e` | Full pipeline over three fictional businesses |
+| `npm test` | Typecheck + all three suites |
+| `npm run test:pipeline` | Pipeline: args, provider, full run, persistence, failures |
+| `npm run test:e2e` | Full spine over three fictional businesses |
 | `npm run test:anthropic` | Claude request/response wiring, stubbed — no key needed |
 | `npm run db:push` | Apply the migration to `DATABASE_URL` |
 | `npm run typecheck` | `tsc --noEmit` |
+
+### Pipeline options
+
+```
+npm run pipeline -- <url> [options]
+npm run pipeline -- --fixture <name>
+
+  --industry <text>     tunes the ROI assumption defaults
+  --country <code>      e.g. SK, AT, CZ
+  --fixture <name>      run offline (karoseria-hronec, praxis-lindner, novak-reality)
+  --build-fee <eur>     one-off build fee for the payback estimate (default 1500)
+  --monthly-fee <eur>   monthly management fee (default 300)
+  --emails <n>          how many email drafts to generate (default 2)
+```
+
+A run saves the lead, snapshot, audit, demo and outreach drafts, and prints
+their ids at the end. The blueprint is a preview and is **not** saved — an agent
+belongs to a client, and a prospect who has not bought should not appear in your
+client list. It is stored when you mark the lead won and create the agent.
+
+Failures tell you which stage broke and what to do:
+
+- **crawl** — the page could not be read (403 bot protection, 404, timeout).
+  Nothing is saved, and the message does not blame the business.
+- **audit** — the page was read but no proposal could be grounded in it. The
+  lead and the failed audit are both kept so the attempt is not lost.
 
 ## Production
 

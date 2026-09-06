@@ -58,6 +58,27 @@ deployment checklist             →     the workflow you actually ship
 If a later version needs long-running orchestration inside the OS itself
 (scheduled re-audits, drip sends), that is a queue plus cron, not n8n.
 
+## The pipeline module
+
+`src/lib/pipeline/` holds the orchestration; `scripts/pipeline.ts` only parses
+argv and prints. That split exists so the pipeline is testable without spawning
+a process — `npm run test:pipeline` drives `runPipeline()` directly over
+bundled fixtures, and asserts on the returned object rather than on stdout.
+
+`runPipeline()` returns a discriminated union, and the distinction it draws is
+load-bearing:
+
+- `{ ok: false, stage: 'crawl' }` — the page was never read. A 403 from bot
+  protection or a corporate proxy lands here. Nothing is saved, and the operator
+  message says the fetch was refused rather than that the business publishes
+  nothing. `crawlSite()` throws `CrawlError` on any non-2xx root response or
+  empty body specifically so this case cannot be mistaken for the next one.
+- `{ ok: false, stage: 'audit' }` — the page was read and no proposal could be
+  grounded in it. That is a judgement about the business, so the lead and the
+  rejected audit are both kept.
+- `{ ok: true, ... }` — carries a `persisted` block of every stored id, which
+  `verifyPersisted()` reads back. The CLI prints it; the tests assert on it.
+
 ## Where the quality actually comes from
 
 Three components do the work that stops this being a generic AI wrapper:

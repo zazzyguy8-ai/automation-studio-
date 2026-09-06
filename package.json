@@ -12,7 +12,9 @@
     "pipeline": "tsx --env-file-if-exists=.env.local scripts/pipeline.ts",
     "test:e2e": "tsx --env-file-if-exists=.env.local scripts/run-e2e.ts",
     "seed": "tsx --env-file-if-exists=.env.local scripts/seed-demo.ts",
-    "test:anthropic": "tsx --env-file-if-exists=.env.local scripts/test-anthropic-wiring.ts"
+    "test:anthropic": "tsx --env-file-if-exists=.env.local scripts/test-anthropic-wiring.ts",
+    "test:pipeline": "tsx --env-file-if-exists=.env.local scripts/test-pipeline.ts",
+    "test": "npm run typecheck && npm run test:pipeline && npm run test:anthropic && npm run test:e2e"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",

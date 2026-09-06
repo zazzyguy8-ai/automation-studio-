@@ -4,86 +4,54 @@
  *   npm run pipeline -- https://some-company.sk --industry "auto repair" --country SK
  *   npm run pipeline -- --fixture karoseria-hronec        # offline demo
  *
- * Same code path as the web UI. Use it when you want the proposal in front of
- * you in 30 seconds without opening a browser.
+ * All orchestration lives in src/lib/pipeline/ so it can be tested directly
+ * (`npm run test:pipeline`). This file only parses argv and prints.
  */
-import { runAudit } from '@/lib/audit/run';
-import { buildDemo } from '@/lib/demo/build';
-import { buildOutreachSequence } from '@/lib/outreach/build';
-import { buildBlueprint } from '@/lib/blueprint/build';
-import { fixtureFetcher } from '@/lib/scrape/fixture-fetcher';
-import { paybackMonths } from '@/lib/estimate/model';
-
-const FIXTURE_URLS: Record<string, { url: string; industry: string; country: string }> = {
-  'karoseria-hronec': { url: 'https://karoseria-hronec.sk', industry: 'auto body repair', country: 'SK' },
-  'praxis-lindner': { url: 'https://lindner-dental.at', industry: 'dental clinic', country: 'AT' },
-  'novak-reality': { url: 'https://novakreality.cz', industry: 'real estate agency', country: 'CZ' },
-};
-
-function arg(flag: string): string | undefined {
-  const i = process.argv.indexOf(flag);
-  return i === -1 ? undefined : process.argv[i + 1];
-}
+import { PipelineArgsError, USAGE, parsePipelineArgs } from '@/lib/pipeline/args';
+import { activeProvider, runPipeline, verifyPersisted } from '@/lib/pipeline/run';
 
 const h1 = (s: string) => console.log(`\n\x1b[1m${s}\x1b[0m\n${'-'.repeat(s.length)}`);
 
 async function main() {
-  const fixture = arg('--fixture');
-  const positional = process.argv.slice(2).find((a) => !a.startsWith('--') && /\./.test(a));
-
-  let website = positional;
-  let industry = arg('--industry') ?? null;
-  let country = arg('--country') ?? null;
-  let fetcher;
-
-  if (fixture) {
-    const f = FIXTURE_URLS[fixture];
-    if (!f) {
-      console.error(`unknown fixture "${fixture}". Options: ${Object.keys(FIXTURE_URLS).join(', ')}`);
-      process.exit(1);
+  let args;
+  try {
+    args = parsePipelineArgs(process.argv.slice(2));
+  } catch (err) {
+    if (err instanceof PipelineArgsError) {
+      console.error(`${err.message}\n\n${USAGE}`);
+      process.exit(2);
     }
-    website = f.url;
-    industry ??= f.industry;
-    country ??= f.country;
-    fetcher = fixtureFetcher(fixture, f.url);
+    throw err;
   }
-
-  if (!website) {
-    console.error('usage: npm run pipeline -- <url> [--industry "..."] [--country XX]');
-    console.error('   or: npm run pipeline -- --fixture karoseria-hronec');
-    process.exit(1);
-  }
-
-  const buildFee = Number(arg('--build-fee') ?? 1500);
-  const monthlyFee = Number(arg('--monthly-fee') ?? 300);
 
   // Say which brain is running before the work starts, so a missing key is
   // obvious immediately rather than after a thin-looking audit.
-  const provider = process.env.REASONING_PROVIDER
-    ?? (process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'heuristic');
-  if (provider === 'heuristic') {
-    console.log('reasoning: heuristic (no ANTHROPIC_API_KEY in env or .env.local) - audits will be thinner');
-  } else {
-    console.log(`reasoning: ${provider} (${process.env.AUDIT_MODEL ?? 'claude-opus-5'})`);
-  }
-  console.log(`Auditing ${website} …`);
-  const { lead, snapshot, audit } = await runAudit({ website, industry, country, source: 'cli', fetcher });
+  const provider = activeProvider();
+  console.log(provider.name === 'heuristic'
+    ? 'reasoning: heuristic (no ANTHROPIC_API_KEY in env or .env.local) - audits will be thinner'
+    : `reasoning: ${provider.name} (${provider.model})`);
+  console.log(`Auditing ${args.website}${args.fixture ? ' [offline fixture]' : ''} …`);
 
-  if (audit.status !== 'ok') {
-    console.error(`\nAudit ${audit.status}. It was stored but will not be shown to a prospect.`);
-    for (const g of audit.gate_report.length ? audit.gate_report : [audit.error]) console.error(`  - ${g}`);
+  const run = await runPipeline(args);
+
+  if (!run.ok) {
+    console.error(run.stage === 'crawl'
+      ? `\nCould not read ${args.website}. Nothing was saved.`
+      : `\nAudit ${run.audit?.status}. It was stored, but it is not fit to show a prospect.`);
+    for (const reason of run.reasons) console.error(`  - ${reason}`);
+    console.error(`\n${run.hint}`);
+    if (run.lead) console.error(`\nThe lead record is at /leads/${run.lead.id}`);
     process.exit(1);
   }
 
-  const result = audit.result!;
-  const winner = result.opportunities.find((o) => o.id === result.recommended_opportunity_id)!;
-  const problem = result.problems.find((p) => p.id === winner.problem_id)!;
+  const { lead, snapshot, result, problem, winner, demo, payback, emails, blueprint } = run;
 
   h1(`${lead.company_name}  (${lead.website})`);
   console.log(result.business_profile.what_they_do);
   console.log(`intake: ${result.business_profile.intake_channels.join(', ')}`);
   console.log(`booking: ${result.business_profile.booking_model}`);
-  console.log(`pages read: ${snapshot.pages.length} · model: ${audit.model}`);
+  console.log(`contacts: ${lead.contacts.map((c) => `${c.kind}:${c.value}`).join(', ') || 'none found'}`);
+  console.log(`pages read: ${snapshot.pages.length} · model: ${run.audit.model}`);
 
   h1('THIS IS THEIR PROBLEM');
   console.log(problem.title);
@@ -107,15 +75,12 @@ async function main() {
   }
   console.log(`\nwhy the winner: ${result.recommendation_rationale}`);
 
-  const demo = await buildDemo(lead, audit);
-
   h1('THIS IS THE ROI (ALL ESTIMATES, NOT MEASUREMENTS)');
   for (const e of demo.impact) {
     console.log(`  ~ ${e.label}: ${e.low}–${e.high} ${e.unit}  [${e.confidence}]`);
     console.log(`      ${e.assumptions[1] ?? e.assumptions[0]}`);
   }
-  const payback = paybackMonths(demo.impact, buildFee, monthlyFee);
-  console.log(`  ~ ${payback.label}: ${payback.low}–${payback.high} at EUR ${buildFee} build + EUR ${monthlyFee}/mo`);
+  console.log(`  ~ ${payback.label}: ${payback.low}–${payback.high} at EUR ${args.buildFee} build + EUR ${args.monthlyFee}/mo`);
 
   h1('THIS IS THE DEMO SCRIPT');
   console.log(demo.headline);
@@ -126,26 +91,32 @@ async function main() {
   console.log('');
   for (const s of demo.scenes) console.log(`  ${s.t}  [${s.on_screen}]\n     "${s.narration}"`);
 
-  const emails = await buildOutreachSequence(lead, audit, demo, 'email', 2);
-
   h1('THIS IS WHAT WE SEND THEM (draft - approve in the UI before sending)');
   console.log(`Subject: ${emails[0].subject}\n`);
   console.log(emails[0].body);
-
-  const blueprint = buildBlueprint(winner.template_key, {
-    client: {
-      id: 'preview', lead_id: lead.id, name: lead.company_name, country: lead.country,
-      build_fee_eur: buildFee, monthly_fee_eur: monthlyFee, stripe_customer_id: null,
-      created_at: new Date().toISOString(),
-    },
-    audit: result,
-  });
+  if (emails.length > 1) console.log(`\n(+${emails.length - 1} follow-up draft(s) on the lead record)`);
 
   h1('IF THEY BUY, THIS IS THE BUILD');
   console.log(`${blueprint.steps.length} steps · ${blueprint.deployment_checklist.length} checklist items`);
   console.log('credentials needed (names only — values go in the secret store):');
   for (const c of blueprint.credentials.filter((x) => x.required)) console.log(`  - ${c.env_var}  (${c.provider})`);
   console.log(`handoff: ${blueprint.human_handoff.route_to} — ${blueprint.human_handoff.sla}`);
+  console.log('\nThe blueprint above is a preview and is NOT stored: an agent belongs to a client,');
+  console.log('and a prospect who has not bought must not appear in your client list. It is saved');
+  console.log('when you mark the lead won and create the agent.');
+
+  const check = await verifyPersisted(run.persisted);
+  h1('SAVED');
+  console.log(`  lead      ${run.persisted.lead_id}`);
+  console.log(`  snapshot  ${run.persisted.snapshot_id} (${snapshot.pages.length} pages)`);
+  console.log(`  audit     ${run.persisted.audit_id}`);
+  console.log(`  demo      ${run.persisted.demo_id}`);
+  console.log(`  outreach  ${run.persisted.outreach_ids.length} draft(s)`);
+  console.log(`  store     ${process.env.DATABASE_URL ? 'postgres' : `file (${process.env.DATA_FILE ?? '.data/studio.json'})`}`);
+  if (!check.ok) {
+    console.error(`\nWARNING: these records could not be read back: ${check.missing.join(', ')}`);
+    process.exit(1);
+  }
 
   console.log(`\nOpen the full record: /leads/${lead.id}`);
 }
