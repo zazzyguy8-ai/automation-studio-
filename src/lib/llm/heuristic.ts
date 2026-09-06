@@ -457,9 +457,7 @@ export class HeuristicProvider implements ReasoningProvider {
       return { subject: null, body: bodies[Math.min(step, bodies.length - 1)], grounding };
     }
 
-    const first = `Subject-line context: ${lead.company_name}
-
-I went through ${lead.website} properly before writing this.
+    const first = `I went through ${lead.website} properly before writing this.
 
 On ${quote.url} you say: "${quote.quote.slice(0, 140)}"
 

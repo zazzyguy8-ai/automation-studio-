@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "db:push": "tsx scripts/db-push.ts",
     "pipeline": "tsx scripts/pipeline.ts",
-    "test:e2e": "tsx --tsconfig tsconfig.json scripts/run-e2e.ts"
+    "test:e2e": "tsx scripts/run-e2e.ts",
+    "seed": "tsx scripts/seed-demo.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",
