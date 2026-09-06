@@ -1,7 +1,7 @@
 import { getStore } from '@/lib/db';
 import { getProvider } from '@/lib/llm';
 import { rank } from '@/lib/llm/heuristic';
-import { contactsFromSnapshot, crawlSite, normalizeUrl, sizeHint, type Fetcher } from '@/lib/scrape/crawl';
+import { contactsFromSnapshot, crawlSite, mergeContacts, normalizeUrl, sizeHint, type Fetcher } from '@/lib/scrape/crawl';
 import type { Audit, Lead, Snapshot } from '@/lib/types';
 import { gateAudit } from './gate';
 
@@ -47,7 +47,7 @@ export async function runAudit(req: AuditRequest): Promise<AuditRun> {
     country: req.country ?? existing?.country ?? null,
     size_hint: sizeHint(crawled),
     stage: existing?.stage ?? 'new',
-    contacts: contactsFromSnapshot(crawled.signals),
+    contacts: mergeContacts(existing?.contacts ?? [], contactsFromSnapshot(crawled.signals, website)),
     socials: crawled.signals.social_links,
     notes: existing?.notes ?? null,
     source: req.source ?? existing?.source ?? 'manual',

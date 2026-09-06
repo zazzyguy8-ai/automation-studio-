@@ -2,9 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import type {
-  Agent, Audit, Client, Demo, Execution, Lead, LeadStage, OutreachMessage, Snapshot,
+  Agent, Audit, Campaign, Client, Demo, EngineState, Execution, Lead, LeadStage,
+  OutreachMessage, Reply, Snapshot, Suppression,
 } from '@/lib/types';
-import type { LeadFilter, Store } from './store';
+import type { LeadFilter, NewOutreachMessage, Store } from './store';
 
 const num = (v: unknown): number => (v === null || v === undefined ? 0 : Number(v));
 const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
@@ -23,8 +24,11 @@ export class PgStore implements Store {
 
   async init() {
     if (this.ready) return;
-    const sql = await readFile(join(process.cwd(), 'supabase/migrations/0001_init.sql'), 'utf8');
-    await this.pool.query(sql);
+    // Migrations are idempotent and applied in order, so init() is safe to
+    // call on every cold start.
+    for (const file of ['0001_init.sql', '0002_outreach_engine.sql']) {
+      await this.pool.query(await readFile(join(process.cwd(), 'supabase/migrations', file), 'utf8'));
+    }
     this.ready = true;
   }
 
@@ -179,15 +183,24 @@ export class PgStore implements Store {
       status: r.status as OutreachMessage['status'], grounding: (r.grounding as string[]) ?? [],
       approved_at: r.approved_at ? iso(r.approved_at) : null,
       sent_at: r.sent_at ? iso(r.sent_at) : null, created_at: iso(r.created_at),
+      campaign_id: (r.campaign_id as string) ?? null,
+      thread_id: (r.thread_id as string) ?? null,
+      scheduled_at: r.scheduled_at ? iso(r.scheduled_at) : null,
+      sent_to: (r.sent_to as string) ?? null,
+      stop_reason: (r.stop_reason as string) ?? null,
     };
   }
 
-  async insertOutreach(m: Omit<OutreachMessage, 'id'>) {
+  async insertOutreach(m: NewOutreachMessage) {
     const { rows } = await this.pool.query(
-      `insert into outreach_messages (lead_id, audit_id, channel, step, subject, body, status, grounding, created_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9) returning *`,
+      `insert into outreach_messages
+         (lead_id, audit_id, channel, step, subject, body, status, grounding, created_at,
+          campaign_id, thread_id, scheduled_at, sent_to, stop_reason)
+       values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14) returning *`,
       [m.lead_id, m.audit_id, m.channel, m.step, m.subject, m.body, m.status,
-        JSON.stringify(m.grounding), m.created_at]);
+        JSON.stringify(m.grounding), m.created_at,
+        m.campaign_id ?? null, m.thread_id ?? null, m.scheduled_at ?? null,
+        m.sent_to ?? null, m.stop_reason ?? null]);
     return PgStore.outreach(rows[0]);
   }
 
@@ -197,14 +210,204 @@ export class PgStore implements Store {
     return rows.map(PgStore.outreach);
   }
 
-  async setOutreachStatus(id: string, status: OutreachMessage['status']) {
+  async setOutreachStatus(id: string, status: OutreachMessage['status'], patch: Partial<OutreachMessage> = {}) {
     const { rows } = await this.pool.query(
       `update outreach_messages set status = $2,
-         approved_at = case when $2 = 'approved' then now() else approved_at end,
-         sent_at     = case when $2 = 'sent'     then now() else sent_at end
-       where id = $1 returning *`, [id, status]);
+         approved_at  = case when $2 = 'approved' then now() else approved_at end,
+         sent_at      = case when $2 = 'sent' then coalesce(sent_at, $8::timestamptz, now()) else sent_at end,
+         sent_to      = coalesce($3, sent_to),
+         stop_reason  = coalesce($4, stop_reason),
+         scheduled_at = coalesce($5, scheduled_at),
+         thread_id    = coalesce($6::uuid, thread_id),
+         campaign_id  = coalesce($7::uuid, campaign_id)
+       where id = $1 returning *`,
+      [id, status, patch.sent_to ?? null, patch.stop_reason ?? null, patch.scheduled_at ?? null,
+        patch.thread_id ?? null, patch.campaign_id ?? null, patch.sent_at ?? null]);
     if (!rows[0]) throw new Error(`outreach ${id} not found`);
     return PgStore.outreach(rows[0]);
+  }
+
+  async getOutreach(id: string) {
+    const { rows } = await this.pool.query('select * from outreach_messages where id = $1', [id]);
+    return rows[0] ? PgStore.outreach(rows[0]) : null;
+  }
+
+  async listSendable(now: string, limit: number) {
+    const { rows } = await this.pool.query(
+      `select * from outreach_messages
+        where status in ('approved','queued')
+          and (scheduled_at is null or scheduled_at <= $1)
+        order by coalesce(scheduled_at, created_at) asc limit $2`, [now, limit]);
+    return rows.map(PgStore.outreach);
+  }
+
+  async listOutreachByThread(threadId: string) {
+    const { rows } = await this.pool.query(
+      'select * from outreach_messages where thread_id = $1 order by step asc', [threadId]);
+    return rows.map(PgStore.outreach);
+  }
+
+  async listOutreachByStatus(status: OutreachMessage['status'], limit = 200) {
+    const { rows } = await this.pool.query(
+      'select * from outreach_messages where status = $1 order by created_at desc limit $2', [status, limit]);
+    return rows.map(PgStore.outreach);
+  }
+
+  async countOutreach() {
+    const { rows } = await this.pool.query('select status, count(*)::int as n from outreach_messages group by status');
+    const counts = {} as Record<OutreachMessage['status'], number>;
+    for (const r of rows) counts[r.status as OutreachMessage['status']] = Number(r.n);
+    return counts;
+  }
+
+  private static campaign(r: Record<string, unknown>): Campaign {
+    return {
+      id: String(r.id), name: String(r.name), industry: String(r.industry),
+      country: String(r.country), city: (r.city as string) ?? null,
+      daily_target: num(r.daily_target), daily_send_cap: num(r.daily_send_cap),
+      build_fee_eur: num(r.build_fee_eur), monthly_fee_eur: num(r.monthly_fee_eur),
+      status: r.status as Campaign['status'], created_at: iso(r.created_at),
+    };
+  }
+
+  async insertCampaign(c: Omit<Campaign, 'id' | 'created_at'>) {
+    const { rows } = await this.pool.query(
+      `insert into campaigns (name, industry, country, city, daily_target, daily_send_cap,
+                              build_fee_eur, monthly_fee_eur, status)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+      [c.name, c.industry, c.country, c.city, c.daily_target, c.daily_send_cap,
+        c.build_fee_eur, c.monthly_fee_eur, c.status]);
+    return PgStore.campaign(rows[0]);
+  }
+
+  async listCampaigns() {
+    const { rows } = await this.pool.query('select * from campaigns order by created_at desc');
+    return rows.map(PgStore.campaign);
+  }
+
+  async getCampaign(id: string) {
+    const { rows } = await this.pool.query('select * from campaigns where id = $1', [id]);
+    return rows[0] ? PgStore.campaign(rows[0]) : null;
+  }
+
+  async setCampaignStatus(id: string, status: Campaign['status']) {
+    const { rows } = await this.pool.query(
+      'update campaigns set status = $2 where id = $1 returning *', [id, status]);
+    if (!rows[0]) throw new Error(`campaign ${id} not found`);
+    return PgStore.campaign(rows[0]);
+  }
+
+  private static reply(r: Record<string, unknown>): Reply {
+    return {
+      id: String(r.id), lead_id: String(r.lead_id),
+      message_id: (r.message_id as string) ?? null,
+      channel: r.channel as Reply['channel'], from_address: String(r.from_address),
+      subject: (r.subject as string) ?? null, body: String(r.body),
+      classification: r.classification as Reply['classification'],
+      classification_reason: String(r.classification_reason),
+      received_at: iso(r.received_at), handled: Boolean(r.handled),
+    };
+  }
+
+  async insertReply(r: Omit<Reply, 'id'>) {
+    const { rows } = await this.pool.query(
+      `insert into replies (lead_id, message_id, channel, from_address, subject, body,
+                            classification, classification_reason, received_at, handled)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
+      [r.lead_id, r.message_id, r.channel, r.from_address, r.subject, r.body,
+        r.classification, r.classification_reason, r.received_at, r.handled]);
+    return PgStore.reply(rows[0]);
+  }
+
+  async listReplies(limit = 200) {
+    const { rows } = await this.pool.query(
+      'select * from replies order by received_at desc limit $1', [limit]);
+    return rows.map(PgStore.reply);
+  }
+
+  async setReplyHandled(id: string, handled: boolean) {
+    const { rows } = await this.pool.query(
+      'update replies set handled = $2 where id = $1 returning *', [id, handled]);
+    if (!rows[0]) throw new Error(`reply ${id} not found`);
+    return PgStore.reply(rows[0]);
+  }
+
+  private static suppression(r: Record<string, unknown>): Suppression {
+    return {
+      id: String(r.id), value: String(r.value), scope: r.scope as Suppression['scope'],
+      reason: r.reason as Suppression['reason'], note: (r.note as string) ?? null,
+      created_at: iso(r.created_at),
+    };
+  }
+
+  async addSuppression(s: Omit<Suppression, 'id' | 'created_at'>) {
+    const { rows } = await this.pool.query(
+      `insert into suppressions (value, scope, reason, note) values (lower($1),$2,$3,$4)
+       on conflict (value, scope) do update set reason = suppressions.reason returning *`,
+      [s.value.trim(), s.scope, s.reason, s.note]);
+    return PgStore.suppression(rows[0]);
+  }
+
+  async listSuppressions() {
+    const { rows } = await this.pool.query('select * from suppressions order by created_at desc');
+    return rows.map(PgStore.suppression);
+  }
+
+  async isSuppressed(address: string) {
+    const value = address.trim().toLowerCase();
+    const domain = value.includes('@') ? value.split('@')[1] : value;
+    const { rows } = await this.pool.query(
+      `select * from suppressions
+        where (scope = 'address' and value = $1) or (scope = 'domain' and value = $2) limit 1`,
+      [value, domain]);
+    return rows[0] ? PgStore.suppression(rows[0]) : null;
+  }
+
+  private static engine(r: Record<string, unknown>): EngineState {
+    return {
+      id: 'singleton',
+      kill_switch: Boolean(r.kill_switch),
+      kill_switch_reason: (r.kill_switch_reason as string) ?? null,
+      counter_date: iso(r.counter_date).slice(0, 10),
+      sent_today: num(r.sent_today),
+      daily_send_cap: num(r.daily_send_cap),
+      hourly_send_cap: num(r.hourly_send_cap),
+      min_seconds_between_sends: num(r.min_seconds_between_sends),
+      quiet_hours_start: num(r.quiet_hours_start),
+      quiet_hours_end: num(r.quiet_hours_end),
+      last_sent_at: r.last_sent_at ? iso(r.last_sent_at) : null,
+      updated_at: iso(r.updated_at),
+    };
+  }
+
+  async getEngineState() {
+    const { rows } = await this.pool.query(
+      `insert into engine_state (id) values ('singleton')
+       on conflict (id) do update set id = 'singleton' returning *`);
+    return PgStore.engine(rows[0]);
+  }
+
+  async updateEngineState(patch: Partial<EngineState>) {
+    await this.getEngineState();
+    const { rows } = await this.pool.query(
+      `update engine_state set
+         kill_switch               = coalesce($1, kill_switch),
+         kill_switch_reason        = $2,
+         counter_date              = coalesce($3::date, counter_date),
+         sent_today                = coalesce($4, sent_today),
+         daily_send_cap            = coalesce($5, daily_send_cap),
+         hourly_send_cap           = coalesce($6, hourly_send_cap),
+         min_seconds_between_sends = coalesce($7, min_seconds_between_sends),
+         quiet_hours_start         = coalesce($8, quiet_hours_start),
+         quiet_hours_end           = coalesce($9, quiet_hours_end),
+         last_sent_at              = coalesce($10, last_sent_at),
+         updated_at                = now()
+       where id = 'singleton' returning *`,
+      [patch.kill_switch ?? null, patch.kill_switch_reason ?? null, patch.counter_date ?? null,
+        patch.sent_today ?? null, patch.daily_send_cap ?? null, patch.hourly_send_cap ?? null,
+        patch.min_seconds_between_sends ?? null, patch.quiet_hours_start ?? null,
+        patch.quiet_hours_end ?? null, patch.last_sent_at ?? null]);
+    return PgStore.engine(rows[0]);
   }
 
   private static client(r: Record<string, unknown>): Client {

@@ -1,6 +1,13 @@
 import type {
-  Agent, Audit, Client, Demo, Execution, Lead, LeadStage, OutreachMessage, Snapshot,
+  Agent, Audit, Campaign, Client, Demo, EngineState, Execution, Lead, LeadStage,
+  OutreachMessage, Reply, Snapshot, Suppression,
 } from '@/lib/types';
+
+/** Engine-only fields default when a caller does not set them, so the older
+ *  call sites (pipeline, tests) stay unchanged. */
+export type NewOutreachMessage =
+  Omit<OutreachMessage, 'id' | 'campaign_id' | 'thread_id' | 'scheduled_at' | 'sent_to' | 'stop_reason'>
+  & Partial<Pick<OutreachMessage, 'campaign_id' | 'thread_id' | 'scheduled_at' | 'sent_to' | 'stop_reason'>>;
 
 export interface LeadFilter {
   q?: string;
@@ -30,9 +37,33 @@ export interface Store {
   insertDemo(d: Omit<Demo, 'id'>): Promise<Demo>;
   latestDemo(leadId: string): Promise<Demo | null>;
 
-  insertOutreach(m: Omit<OutreachMessage, 'id'>): Promise<OutreachMessage>;
+  insertOutreach(m: NewOutreachMessage): Promise<OutreachMessage>;
   listOutreach(leadId: string): Promise<OutreachMessage[]>;
-  setOutreachStatus(id: string, status: OutreachMessage['status']): Promise<OutreachMessage>;
+  setOutreachStatus(
+    id: string, status: OutreachMessage['status'], patch?: Partial<OutreachMessage>,
+  ): Promise<OutreachMessage>;
+  getOutreach(id: string): Promise<OutreachMessage | null>;
+  /** Messages whose scheduled time has arrived and that are ready to send. */
+  listSendable(now: string, limit: number): Promise<OutreachMessage[]>;
+  listOutreachByThread(threadId: string): Promise<OutreachMessage[]>;
+  listOutreachByStatus(status: OutreachMessage['status'], limit?: number): Promise<OutreachMessage[]>;
+  countOutreach(): Promise<Record<OutreachMessage['status'], number>>;
+
+  insertCampaign(c: Omit<Campaign, 'id' | 'created_at'>): Promise<Campaign>;
+  listCampaigns(): Promise<Campaign[]>;
+  getCampaign(id: string): Promise<Campaign | null>;
+  setCampaignStatus(id: string, status: Campaign['status']): Promise<Campaign>;
+
+  insertReply(r: Omit<Reply, 'id'>): Promise<Reply>;
+  listReplies(limit?: number): Promise<Reply[]>;
+  setReplyHandled(id: string, handled: boolean): Promise<Reply>;
+
+  addSuppression(s: Omit<Suppression, 'id' | 'created_at'>): Promise<Suppression>;
+  listSuppressions(): Promise<Suppression[]>;
+  isSuppressed(address: string): Promise<Suppression | null>;
+
+  getEngineState(): Promise<EngineState>;
+  updateEngineState(patch: Partial<EngineState>): Promise<EngineState>;
 
   insertClient(c: Omit<Client, 'id' | 'created_at'>): Promise<Client>;
   listClients(): Promise<Client[]>;

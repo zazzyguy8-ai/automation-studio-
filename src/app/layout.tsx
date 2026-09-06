@@ -15,6 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <h1>Automation Studio</h1>
             <span className="tag">internal agency OS</span>
             <nav>
+              <a href="/engine">Outreach engine</a>
               <a href="/discover">Find companies</a>
               <a href="/">Run an audit</a>
               <a href="/leads">Leads</a>

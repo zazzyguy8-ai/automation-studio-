@@ -112,6 +112,42 @@ high-risk market without an explicit acknowledgement flag that only the UI
 checkbox sets. That is why the same draft behaves differently for a British and
 a German lead.
 
+## The outreach engine
+
+`src/lib/engine/` runs discovery -> audit -> rank -> draft, and stops. Sending is
+a separate pass over what a human approved.
+
+The design decisions that matter:
+
+**Approval is not automatable.** The daily run produces drafts and nothing else.
+`runSendQueue` only picks up `approved` messages. There is no code path from
+"drafted" to "sent" that does not pass through a person.
+
+**Guards are per message, not per run.** `checkSendGate` runs for every single
+message and returns `halt` (stop the run: kill switch, caps, quiet hours) or a
+skip (this message only: suppressed, not due, no address). A kill switch that is
+only read once at the start of a batch is not a kill switch.
+
+**Suppression is checked twice.** Once when drafting, so a suppressed company
+does not even cost an audit, and again at send time, because an unsubscribe can
+land in between.
+
+**Follow-ups are drafted up front and scheduled on send.** They exist as drafts
+from the daily run so you approve the whole sequence you will actually send, but
+their times are set only once the first touch has genuinely gone out. A message
+that never sent never generates follow-ups.
+
+**Reply classification is rules, not a model.** Unsubscribes and bounces have
+legal and deliverability consequences; they must not depend on an API being
+available. The rules are ordered, and a refusal is checked before interest
+because "not interested" contains "interested" - reading that as a positive is
+the worst available misclassification.
+
+**Channels share one interface.** `ChannelAdapter` covers email, SMS and voice.
+Email has a dry-run adapter (the default) and a real one. SMS and voice report
+themselves unavailable with the specific reason - provisioning, consent,
+do-not-call checks - so the gap is documented in the code that would do the work.
+
 ## Where the quality actually comes from
 
 Three components do the work that stops this being a generic AI wrapper:

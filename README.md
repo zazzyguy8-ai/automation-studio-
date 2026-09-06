@@ -106,6 +106,65 @@ draft, send it yourself, then mark it sent. Approval stays blocked on messages
 with no grounding, that never name the company, or that open with a template
 line — market acknowledgement does not override those.
 
+## The outreach engine
+
+Runs the loop end to end and stops at your inbox:
+
+```bash
+npm run engine -- daily --demo   # find 50, audit, rank, draft into the inbox
+npm run engine -- status         # dashboard
+npm run engine -- send           # send what YOU approved (dry run by default)
+npm run engine -- stop "reason"  # kill switch
+npm run engine -- start
+```
+
+Or drive it from `/engine`.
+
+**One boundary, and it does not move: the engine never approves anything.** It
+removes the research and the writing; it does not remove the decision about who
+gets contacted. Each daily run discovers companies, audits them, ranks by
+opportunity score plus how contactable they are, and drafts a first touch and
+two follow-ups. They sit as drafts until you approve them.
+
+**Sending is a dry run until you flip two switches.** Set `RESEND_API_KEY` *and*
+`OUTREACH_SENDING_ENABLED=true`. Two, because "it started emailing real
+companies" is not a mistake you get to make twice.
+
+### Guards, checked per message and not per run
+
+| Guard | Behaviour |
+|---|---|
+| Kill switch | Nothing sends. Checked before every individual message, and reported even when the queue is empty. |
+| Daily cap | Default 30. Halts the run. |
+| Per-run cap | Default 8. |
+| Minimum gap | Default 90s between sends. |
+| Quiet hours | Default 20:00–08:00, wrapping midnight correctly. |
+| Suppression | Checked at draft time *and* again at send time, because an opt-out can arrive in between. |
+| Approval | Only `approved` messages are picked up, ever. |
+
+### Follow-ups
+
+Two, at +3 and +5 days, and they are **drafts** as well — the timing is
+automated, the decision is not. Any reply, unsubscribe or bounce cancels every
+unsent message in the thread. An out-of-office deliberately does not: it is not
+a reply, and stopping on one would silently kill working sequences.
+
+### Replies
+
+Classified by auditable rules rather than a model call, because the consequential
+cases (unsubscribe, bounce) must never depend on an API being up. Unsubscribes
+and hard bounces go on the suppression list automatically; everything else lands
+in the reply inbox for you.
+
+### SMS and voice
+
+Architecture only, on the same `ChannelAdapter` interface, and they report
+themselves unavailable with the reason. What is outstanding is not code: number
+provisioning and sender registration, STOP keyword handling, recording consent,
+do-not-call register checks, and a per-country legality decision. Both are far
+more restricted than email in the priority markets — their natural home is a
+client's inbound agent, not your outbound prospecting.
+
 ## The web UI
 
 ```bash
@@ -114,7 +173,8 @@ npm run dev                    # http://localhost:3000
 ```
 
 - **Run an audit** — paste a URL, get the audit.
-- **Nájsť firmy** (`/discover`) — industry + country/city, with every source URL shown.
+- **Outreach engine** (`/engine`) — kill switch, rate limits, approval inbox, reply inbox, suppression list, funnel.
+- **Find companies** (`/discover`) — industry + country/city, with every source URL shown.
 - **Leads** — the pipeline: New → Audited → Contacted → Replied → Call → Proposal → Won/Lost.
 - **Lead detail** — the whole sales artefact on one page: enrichment, problems
   with quotes, scored options, the recommended workflow, Before/After, the demo
@@ -187,6 +247,8 @@ visible rather than silently degraded.
 | `npm run pipeline -- <url>` | URL → full proposal in the terminal |
 | `npm run pipeline -- --fixture <name>` | Offline demo run |
 | `npm run discover -- --industry X --country GB` | Find and verify companies |
+| `npm run engine -- daily\|send\|status\|stop\|start` | Outreach engine |
+| `npm run test:engine` | Engine end to end over 50 demo leads |
 | `npm run test:discovery` | Discovery: taxonomy, markets, providers, verification, approval |
 | `npm run seed` | Populate the local store |
 | `npm test` | Typecheck + all three suites |

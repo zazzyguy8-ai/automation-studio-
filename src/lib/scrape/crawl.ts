@@ -103,14 +103,40 @@ export async function crawlSite(
   };
 }
 
-/** Contacts, straight from the observed signals — no inference. */
-export function contactsFromSnapshot(signals: Snapshot['signals']): Contact[] {
+/** Contacts, straight from the observed signals — no inference.
+ *  These were read off the company's own pages, so they carry the strongest
+ *  verification label discovery uses. */
+export function contactsFromSnapshot(signals: Snapshot['signals'], rootUrl?: string): Contact[] {
+  const found = (kind: Contact['kind'], value: string): Contact => ({
+    kind, value, label: 'found_on_site', source_url: rootUrl,
+  });
   const contacts: Contact[] = [
-    ...signals.emails.map((value): Contact => ({ kind: 'email', value })),
-    ...signals.phone_numbers.map((value): Contact => ({ kind: 'phone', value })),
+    ...signals.emails.map((v) => found('email', v)),
+    ...signals.phone_numbers.map((v) => found('phone', v)),
   ];
-  if (signals.has_contact_form) contacts.push({ kind: 'form', value: 'website contact form' });
+  if (signals.has_contact_form) contacts.push(found('form', 'website contact form'));
   return contacts;
+}
+
+/**
+ * Merges freshly crawled contacts with what is already on the lead.
+ *
+ * The audit re-crawls a site that discovery already verified, and simply
+ * assigning the new list dropped discovery's verification labels - which the
+ * ranking and the send gate both depend on. Existing entries win on their
+ * label; genuinely new finds are appended.
+ */
+export function mergeContacts(existing: Contact[], fresh: Contact[]): Contact[] {
+  const key = (c: Contact) => `${c.kind}:${c.value.trim().toLowerCase()}`;
+  const merged = new Map<string, Contact>();
+  for (const c of fresh) merged.set(key(c), c);
+  for (const c of existing) {
+    const k = key(c);
+    const incoming = merged.get(k);
+    // Keep the stronger of the two labels rather than whichever ran last.
+    merged.set(k, incoming && c.label !== 'found_on_site' ? incoming : c);
+  }
+  return [...merged.values()];
 }
 
 /** Coarse size hint from what the site shows. Deliberately a hint, not a claim. */

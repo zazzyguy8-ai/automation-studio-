@@ -240,12 +240,24 @@ export const OutreachMessageSchema = z.object({
   step: z.number(),
   subject: z.string().nullable(),
   body: z.string(),
-  status: z.enum(['draft', 'approved', 'rejected', 'sent']),
+  status: z.enum([
+    'draft', 'approved', 'queued', 'sent', 'rejected', 'suppressed', 'cancelled', 'failed',
+  ]),
   /** Which audit evidence this message leans on. Empty => blocked from approval. */
   grounding: z.array(z.string()),
   approved_at: z.string().nullable(),
   sent_at: z.string().nullable(),
   created_at: z.string(),
+  /** Set for engine-generated messages. */
+  campaign_id: z.string().nullable().default(null),
+  /** Groups the first touch and its follow-ups so a reply can stop all of them. */
+  thread_id: z.string().nullable().default(null),
+  /** Earliest time a follow-up may go out. Null means "as soon as approved". */
+  scheduled_at: z.string().nullable().default(null),
+  /** Address actually used, recorded at send time. */
+  sent_to: z.string().nullable().default(null),
+  /** Why a message ended up cancelled/suppressed/failed. */
+  stop_reason: z.string().nullable().default(null),
 });
 export type OutreachMessage = z.infer<typeof OutreachMessageSchema>;
 
@@ -336,3 +348,95 @@ export const ExecutionSchema = z.object({
   started_at: z.string(),
 });
 export type Execution = z.infer<typeof ExecutionSchema>;
+
+/* ------------------------------------------------------------------ */
+/* Outreach engine                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A message moves: draft -> approved -> queued -> sent.
+ *
+ * `suppressed` and `cancelled` are terminal and deliberately distinct:
+ * suppressed means we must not contact this address at all, cancelled means
+ * this particular follow-up is no longer wanted (they replied). Collapsing
+ * them would lose the reason a message never went out.
+ */
+export const MESSAGE_STATUSES = [
+  'draft', 'approved', 'queued', 'sent', 'rejected', 'suppressed', 'cancelled', 'failed',
+] as const;
+export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
+
+export const REPLY_CLASSES = [
+  'positive', 'booked', 'question', 'not_now', 'negative', 'unsubscribe', 'auto_reply', 'bounce',
+] as const;
+export type ReplyClass = (typeof REPLY_CLASSES)[number];
+
+export const ReplySchema = z.object({
+  id: z.string(),
+  lead_id: z.string(),
+  message_id: z.string().nullable(),
+  channel: z.enum(CHANNELS),
+  from_address: z.string(),
+  subject: z.string().nullable(),
+  body: z.string(),
+  classification: z.enum(REPLY_CLASSES),
+  /** Why the classifier decided this, so a wrong call is debuggable. */
+  classification_reason: z.string(),
+  received_at: z.string(),
+  handled: z.boolean(),
+});
+export type Reply = z.infer<typeof ReplySchema>;
+
+/** Never contact again. The list is append-only on purpose. */
+export const SuppressionSchema = z.object({
+  id: z.string(),
+  /** Lower-cased email, or a bare domain to block everyone there. */
+  value: z.string(),
+  scope: z.enum(['address', 'domain']),
+  reason: z.enum(['unsubscribe', 'complaint', 'hard_bounce', 'manual', 'never_contact']),
+  note: z.string().nullable(),
+  created_at: z.string(),
+});
+export type Suppression = z.infer<typeof SuppressionSchema>;
+
+export const CampaignSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  industry: z.string(),
+  country: z.string(),
+  city: z.string().nullable(),
+  /** How many companies to discover per run. */
+  daily_target: z.number(),
+  /** How many of those to actually draft outreach for. */
+  daily_send_cap: z.number(),
+  build_fee_eur: z.number(),
+  monthly_fee_eur: z.number(),
+  status: z.enum(['active', 'paused']),
+  created_at: z.string(),
+});
+export type Campaign = z.infer<typeof CampaignSchema>;
+
+/**
+ * Single row of engine state. The kill switch lives here rather than in an
+ * env var so it can be flipped from the UI and takes effect on the next send,
+ * without a redeploy.
+ */
+export const EngineStateSchema = z.object({
+  id: z.literal('singleton'),
+  /** When true, nothing is sent. Checked before every individual send. */
+  kill_switch: z.boolean(),
+  kill_switch_reason: z.string().nullable(),
+  /** Rolling counters, reset by date. */
+  counter_date: z.string(),
+  sent_today: z.number(),
+  /** Caps. Deliberately conservative defaults. */
+  daily_send_cap: z.number(),
+  hourly_send_cap: z.number(),
+  min_seconds_between_sends: z.number(),
+  /** Local-time window outside which nothing is sent. */
+  quiet_hours_start: z.number(),
+  quiet_hours_end: z.number(),
+  last_sent_at: z.string().nullable(),
+  updated_at: z.string(),
+});
+export type EngineState = z.infer<typeof EngineStateSchema>;
