@@ -57,6 +57,15 @@ async function main() {
   const buildFee = Number(arg('--build-fee') ?? 1500);
   const monthlyFee = Number(arg('--monthly-fee') ?? 300);
 
+  // Say which brain is running before the work starts, so a missing key is
+  // obvious immediately rather than after a thin-looking audit.
+  const provider = process.env.REASONING_PROVIDER
+    ?? (process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'heuristic');
+  if (provider === 'heuristic') {
+    console.log('reasoning: heuristic (no ANTHROPIC_API_KEY in env or .env.local) - audits will be thinner');
+  } else {
+    console.log(`reasoning: ${provider} (${process.env.AUDIT_MODEL ?? 'claude-opus-5'})`);
+  }
   console.log(`Auditing ${website} …`);
   const { lead, snapshot, audit } = await runAudit({ website, industry, country, source: 'cli', fetcher });
 

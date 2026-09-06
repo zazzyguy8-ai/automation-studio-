@@ -8,10 +8,11 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "db:push": "tsx scripts/db-push.ts",
-    "pipeline": "tsx scripts/pipeline.ts",
-    "test:e2e": "tsx scripts/run-e2e.ts",
-    "seed": "tsx scripts/seed-demo.ts"
+    "db:push": "tsx --env-file-if-exists=.env.local scripts/db-push.ts",
+    "pipeline": "tsx --env-file-if-exists=.env.local scripts/pipeline.ts",
+    "test:e2e": "tsx --env-file-if-exists=.env.local scripts/run-e2e.ts",
+    "seed": "tsx --env-file-if-exists=.env.local scripts/seed-demo.ts",
+    "test:anthropic": "tsx --env-file-if-exists=.env.local scripts/test-anthropic-wiring.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",

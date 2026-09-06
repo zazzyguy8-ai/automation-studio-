@@ -144,15 +144,24 @@ function toolResult<T>(message: Anthropic.Message, toolName: string): T {
   return block.input as T;
 }
 
+export interface AnthropicProviderOptions {
+  apiKey?: string;
+  /** Injectable transport, so the request/response wiring can be tested
+   *  without a key and without a network call. */
+  fetch?: typeof fetch;
+}
+
 export class AnthropicProvider implements ReasoningProvider {
   readonly name = 'anthropic';
   private client: Anthropic;
   private auditModel: string;
   private copyModel: string;
 
-  constructor(apiKey = process.env.ANTHROPIC_API_KEY) {
+  constructor(options: AnthropicProviderOptions | string = {}) {
+    const opts = typeof options === 'string' ? { apiKey: options } : options;
+    const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
-    this.client = new Anthropic({ apiKey });
+    this.client = new Anthropic({ apiKey, ...(opts.fetch ? { fetch: opts.fetch } : {}) });
     this.auditModel = process.env.AUDIT_MODEL ?? 'claude-opus-5';
     this.copyModel = process.env.COPY_MODEL ?? 'claude-sonnet-5';
   }

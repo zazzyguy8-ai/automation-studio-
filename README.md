@@ -17,20 +17,42 @@ npm run pipeline -- --fixture karoseria-hronec     # offline, no keys needed
 ```
 
 That prints a complete proposal for a fictional Slovak auto body shop.
-For a real company:
+
+### Turn on Claude
+
+Real audits need a key. Put it in `.env.local` — gitignored, and the only place
+it belongs:
+
+```bash
+cp .env.example .env.local
+# then edit .env.local:
+#   ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Both the web app and the CLI read it from there. The CLI prints which brain it
+is running before it starts, so a missing key is obvious immediately:
+
+```
+reasoning: anthropic (claude-opus-5)          # key found
+reasoning: heuristic (no ANTHROPIC_API_KEY…)  # falling back
+```
+
+Then, for a real company:
 
 ```bash
 npm run pipeline -- https://theircompany.sk --industry "auto repair" --country SK
 ```
 
-With `ANTHROPIC_API_KEY` set it uses Claude. Without it, a deterministic
-signal-driven analyst runs instead so nothing is blocked — the output is
-usable but noticeably thinner. Set the key.
+Without a key a deterministic signal-driven analyst runs instead, so nothing is
+blocked — but it pattern-matches where Claude reads. Set the key.
+
+Never paste a key into a chat, a commit, or a code comment. If one is ever
+exposed, rotate it at console.anthropic.com — the old one keeps working until
+you do.
 
 ## The web UI
 
 ```bash
-cp .env.example .env.local     # optional; runs without it
 npm run seed                   # three example businesses + one live client
 npm run dev                    # http://localhost:3000
 ```
@@ -109,13 +131,15 @@ visible rather than silently degraded.
 | `npm run pipeline -- --fixture <name>` | Offline demo run |
 | `npm run seed` | Populate the local store |
 | `npm run test:e2e` | Full pipeline over three fictional businesses |
+| `npm run test:anthropic` | Claude request/response wiring, stubbed — no key needed |
+| `npm run db:push` | Apply the migration to `DATABASE_URL` |
 | `npm run typecheck` | `tsc --noEmit` |
 
 ## Production
 
-Set `DATABASE_URL` to your Supabase Postgres URL and apply
-`supabase/migrations/0001_init.sql`. That is the only change — the store
-interface is identical. Put the app behind auth before it holds client data.
+Put `DATABASE_URL` (Supabase → Project Settings → Database) in `.env.local` and
+run `npm run db:push`. That is the only change — the store interface is
+identical. Put the app behind auth before it holds client data.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the stack rationale, the
 n8n division of labour, and what was deliberately left out.
