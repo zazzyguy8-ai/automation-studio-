@@ -3,7 +3,7 @@ import { senderFromEnv } from '@/lib/outreach/build';
 import type { OutreachMessage } from '@/lib/types';
 import { DryRunEmailAdapter, ResendEmailAdapter } from './channels/email';
 import type { ChannelAdapter } from './channels/types';
-import { checkSendGate, recordSend, resolveRecipient } from './guards';
+import { checkSendGate, inQuietHours, recordSend, resolveRecipient } from './guards';
 import { scheduleFollowUps } from './sequence';
 
 /**
@@ -115,9 +115,10 @@ export async function runSendQueue(opts: SendRunOptions = {}): Promise<SendRunRe
     return result;
   }
 
-  // Report the kill switch up front. The per-message gate checks it too, so
-  // this is not the thing that makes it safe - it is what stops an empty queue
-  // reporting "nothing to do" when the real answer is "we are stopped".
+  // Report the run-level gates up front. checkSendGate re-checks every one of
+  // them per message, so this is not what makes the run safe - it is what stops
+  // an empty queue reporting "nothing to do" when the real answer is "we are
+  // stopped", "the cap is spent", or "it is the middle of the night".
   const state = await store.getEngineState();
   if (state.kill_switch) {
     result.halted = {
@@ -125,6 +126,30 @@ export async function runSendQueue(opts: SendRunOptions = {}): Promise<SendRunRe
       reason: `Kill switch is on${state.kill_switch_reason ? `: ${state.kill_switch_reason}` : ''}.`,
     };
     return result;
+  }
+  if (state.sent_today >= state.daily_send_cap) {
+    result.halted = {
+      code: 'daily_cap',
+      reason: `Daily cap reached (${state.sent_today}/${state.daily_send_cap}).`,
+    };
+    return result;
+  }
+  if (inQuietHours(now.getHours(), state.quiet_hours_start, state.quiet_hours_end)) {
+    result.halted = {
+      code: 'quiet_hours',
+      reason: `Quiet hours ${state.quiet_hours_start}:00-${state.quiet_hours_end}:00; queued instead.`,
+    };
+    return result;
+  }
+  if (state.last_sent_at) {
+    const gap = (now.getTime() - new Date(state.last_sent_at).getTime()) / 1000;
+    if (gap < state.min_seconds_between_sends) {
+      result.halted = {
+        code: 'too_soon',
+        reason: `Only ${Math.round(gap)}s since the last send; minimum is ${state.min_seconds_between_sends}s.`,
+      };
+      return result;
+    }
   }
 
   const configProblems = senderConfigProblems();

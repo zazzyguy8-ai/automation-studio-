@@ -16,7 +16,7 @@ import { getStore } from '@/lib/db';
 import { runDailyCampaign, scoreLead } from '@/lib/engine/daily';
 import { demoCompanies, demoSearchFetch, demoSiteFetcher } from '@/lib/engine/demo-fixtures';
 import { engineDashboard } from '@/lib/engine/dashboard';
-import { checkSendGate, inQuietHours, setKillSwitch } from '@/lib/engine/guards';
+import { checkSendGate, inQuietHours, quietHoursEnabled, setKillSwitch, setQuietHours } from '@/lib/engine/guards';
 import { classifyReply, handleReply } from '@/lib/engine/replies';
 import { runSendQueue, senderConfigProblems, previewMessage } from '@/lib/engine/send';
 import { DryRunEmailAdapter } from '@/lib/engine/channels/email';
@@ -259,6 +259,91 @@ async function testApprovalAndSending(run: Awaited<ReturnType<typeof testDailyRu
   });
   const drain = await runSendQueue({ adapter, now: AT('2026-03-03', 10) });
   check('lifting the caps lets the rest of the approved queue go out', drain.sent > 0, `${drain.sent}`);
+
+  section('7a. Quiet hours can be switched off; every other gate stays');
+  // 23:00 is inside the default window, so it is the honest test time. These
+  // checks use checkSendGate rather than runSendQueue so they do not consume
+  // the approved queue the later sections rely on.
+  const NIGHT = AT(DAY1, 23);
+  const anyMessage = (await store.listOutreachByStatus('sent', 50))[0]
+    ?? (await store.listOutreachByStatus('draft', 50)).find((m) => m.step === 0)!;
+  const gateLead = (await store.getLead(anyMessage.lead_id))!;
+  const gateMsg = { ...anyMessage, status: 'approved' as const };
+  check('the gate fixture has a verified address to send to',
+    gateLead.contacts.some((c) => c.kind === 'email'), 'no email on the lead');
+
+  await setQuietHours(false);
+  const offState = await store.getEngineState();
+  check('switching off sets start === end', !quietHoursEnabled(offState),
+    `${offState.quiet_hours_start}-${offState.quiet_hours_end}`);
+  check('inQuietHours is false at any hour once off',
+    [0, 3, 12, 20, 23].every((h) => !inQuietHours(h, offState.quiet_hours_start, offState.quiet_hours_end)));
+
+  await store.updateEngineState({
+    counter_date: DAY1, sent_today: 0, daily_send_cap: 30, hourly_send_cap: 30,
+    min_seconds_between_sends: 0, last_sent_at: null,
+  });
+  const nightOk = await checkSendGate({ message: gateMsg, lead: gateLead, now: NIGHT });
+  check('at 23:00 with quiet hours off, the gate allows the send', nightOk.allowed,
+    nightOk.code);
+
+  // Every other gate, all at 23:00, all with quiet hours still off.
+  await setKillSwitch(true, 'gate check');
+  const g1 = await checkSendGate({ message: gateMsg, lead: gateLead, now: NIGHT });
+  check('kill switch STILL blocks at night', !g1.allowed && g1.code === 'kill_switch');
+  await setKillSwitch(false);
+
+  await store.updateEngineState({ daily_send_cap: 0 });
+  const g2 = await checkSendGate({ message: gateMsg, lead: gateLead, now: NIGHT });
+  check('daily cap STILL blocks at night', !g2.allowed && g2.code === 'daily_cap');
+  await store.updateEngineState({ daily_send_cap: 30 });
+
+  const g3 = await checkSendGate({ message: gateMsg, lead: gateLead, now: NIGHT, sentThisRun: 99 });
+  check('per-run cap STILL blocks at night', !g3.allowed && g3.code === 'hourly_cap');
+
+  await store.updateEngineState({ min_seconds_between_sends: 3600, last_sent_at: NIGHT.toISOString() });
+  const g4 = await checkSendGate({ message: gateMsg, lead: gateLead, now: NIGHT });
+  check('minimum gap STILL blocks at night', !g4.allowed && g4.code === 'too_soon');
+  await store.updateEngineState({ min_seconds_between_sends: 0, last_sent_at: null });
+
+  const g5 = await checkSendGate({
+    message: { ...gateMsg, status: 'draft' }, lead: gateLead, now: NIGHT,
+  });
+  check('unapproved messages STILL blocked at night', !g5.allowed && g5.code === 'not_approved');
+
+  const gateAddr = gateLead.contacts.find((c) => c.kind === 'email')!.value;
+  await store.addSuppression({ value: gateAddr, scope: 'address', reason: 'manual', note: 'gate check' });
+  const g6 = await checkSendGate({ message: gateMsg, lead: gateLead, now: NIGHT });
+  check('suppression STILL blocks at night', !g6.allowed && g6.code === 'suppressed');
+
+  // Turning it back on restores the block, so this is a switch, not a removal.
+  await setQuietHours(true);
+  const backOn = await store.getEngineState();
+  check('switching back on restores the 20:00-08:00 window',
+    quietHoursEnabled(backOn) && backOn.quiet_hours_start === 20 && backOn.quiet_hours_end === 8);
+  const g7 = await checkSendGate({ message: gateMsg, lead: gateLead, now: NIGHT });
+  check('with quiet hours back on, night is blocked again',
+    !g7.allowed && g7.code === 'quiet_hours');
+  check('and daytime is still fine',
+    (await checkSendGate({ message: gateMsg, lead: gateLead, now: AT(DAY1, 10) })).code !== 'quiet_hours');
+
+  // An empty queue must name the run-level reason rather than silently doing nothing.
+  await store.updateEngineState({ sent_today: 99, daily_send_cap: 1 });
+  const capReported = await runSendQueue({ adapter, now: AT(DAY1, 10) });
+  check('an empty queue still reports the daily cap', capReported.halted?.code === 'daily_cap',
+    capReported.halted?.code ?? 'silent');
+  await store.updateEngineState({ sent_today: 0, daily_send_cap: 30 });
+  const quietReported = await runSendQueue({ adapter, now: NIGHT });
+  check('an empty queue still reports quiet hours', quietReported.halted?.code === 'quiet_hours',
+    quietReported.halted?.code ?? 'silent');
+
+  // Leave the engine exactly as this section found it.
+  await setQuietHours(true);
+  await store.updateEngineState({
+    counter_date: '2026-03-03', sent_today: 0, daily_send_cap: 30, hourly_send_cap: 30,
+    min_seconds_between_sends: 0, last_sent_at: null,
+  });
+
   return adapter;
 }
 

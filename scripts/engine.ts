@@ -6,6 +6,7 @@
  *   npm run engine -- status                # dashboard
  *   npm run engine -- stop "reason"         # kill switch on
  *   npm run engine -- start                 # kill switch off
+ *   npm run engine -- quiet-hours off|on    # the time-of-day gate only
  *
  * `daily` and `send` are the two things you would put on a schedule. Sending is
  * a dry run unless RESEND_API_KEY is set AND OUTREACH_SENDING_ENABLED=true.
@@ -14,7 +15,7 @@ import { getStore } from '@/lib/db';
 import { engineDashboard } from '@/lib/engine/dashboard';
 import { runDailyCampaign } from '@/lib/engine/daily';
 import { demoCompanies, demoSearchFetch, demoSiteFetcher } from '@/lib/engine/demo-fixtures';
-import { setKillSwitch } from '@/lib/engine/guards';
+import { QUIET_HOURS_DEFAULT, quietHoursEnabled, setKillSwitch, setQuietHours } from '@/lib/engine/guards';
 import { runSendQueue } from '@/lib/engine/send';
 
 const h1 = (s: string) => console.log(`\n\x1b[1m${s}\x1b[0m\n${'-'.repeat(s.length)}`);
@@ -85,7 +86,10 @@ async function status() {
   h1('ENGINE');
   console.log(`sending: ${d.can_send_now ? 'ON' : `BLOCKED — ${d.send_blocked_reason}`}`);
   console.log(`today: ${d.engine.sent_today}/${d.engine.daily_send_cap} · hourly cap ${d.engine.hourly_send_cap}`
-    + ` · min gap ${d.engine.min_seconds_between_sends}s · quiet ${d.engine.quiet_hours_start}:00-${d.engine.quiet_hours_end}:00`);
+    + ` · min gap ${d.engine.min_seconds_between_sends}s`
+    + ` · quiet hours ${quietHoursEnabled(d.engine)
+      ? `${d.engine.quiet_hours_start}:00-${d.engine.quiet_hours_end}:00`
+      : 'OFF (no time-of-day blocking)'}`);
 
   h1('LEADS');
   for (const [stage, n] of Object.entries(d.leads.by_stage)) {
@@ -125,8 +129,24 @@ async function main() {
       console.log('Kill switch OFF. Approved messages will send on the next run.');
       return;
     }
+    case 'quiet-hours': {
+      const arg = process.argv[3];
+      if (arg !== 'on' && arg !== 'off') {
+        console.error('usage: npm run engine -- quiet-hours <on|off>');
+        process.exit(2);
+      }
+      const state = await setQuietHours(arg === 'on');
+      if (arg === 'on') {
+        console.log(`Quiet hours ON: ${state.quiet_hours_start}:00-${state.quiet_hours_end}:00 (sender local time).`);
+      } else {
+        console.log('Quiet hours OFF. Time of day no longer blocks sending.');
+        console.log('Every other gate is untouched: kill switch, daily and per-run caps,');
+        console.log('minimum gap between sends, suppression list, approval, sender config.');
+      }
+      return;
+    }
     default:
-      console.error('usage: npm run engine -- <daily|send|status|stop|start> [--demo]');
+      console.error('usage: npm run engine -- <daily|send|status|stop|start|quiet-hours> [--demo]');
       process.exit(2);
   }
 }

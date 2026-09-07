@@ -89,6 +89,11 @@ export default async function EnginePage() {
         <p className="small muted" style={{ marginBottom: 0 }}>
           Conservative caps protect your sending domain. A new domain should warm up over weeks,
           not open at full volume.
+          {d.engine.quiet_hours_start === d.engine.quiet_hours_end && (
+            <> <strong>Quiet hours are off</strong> — time of day will not block sending. Every
+            other gate (kill switch, caps, minimum gap, suppression, approval, sender config)
+            is unaffected.</>
+          )}
         </p>
       </div>
 

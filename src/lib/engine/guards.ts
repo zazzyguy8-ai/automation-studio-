@@ -36,10 +36,41 @@ export function rolloverCounters(state: EngineState, now: Date): Partial<EngineS
   return { counter_date: today, sent_today: 0 };
 }
 
-/** Quiet hours wrap midnight (e.g. 20 -> 8), so the comparison is not a simple range. */
+/**
+ * Quiet hours wrap midnight (e.g. 20 -> 8), so the comparison is not a simple
+ * range. Setting start === end disables the window entirely.
+ *
+ * A caveat worth knowing before you switch it off: the hour compared here is
+ * the SENDER's local time, not the recipient's. Sending UK prospects from a
+ * machine in Bratislava already shifts the window by an hour, so this gate was
+ * never a precise "do not disturb" - it is a coarse guard against sending at
+ * 3am your time.
+ */
 export function inQuietHours(hour: number, start: number, end: number): boolean {
   if (start === end) return false;
   return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
+/** Whether the time-of-day gate is active at all. */
+export function quietHoursEnabled(state: Pick<EngineState, 'quiet_hours_start' | 'quiet_hours_end'>): boolean {
+  return state.quiet_hours_start !== state.quiet_hours_end;
+}
+
+/** The two settings that turn the time-of-day gate off and on. */
+export const QUIET_HOURS_OFF = { quiet_hours_start: 0, quiet_hours_end: 0 } as const;
+export const QUIET_HOURS_DEFAULT = { quiet_hours_start: 20, quiet_hours_end: 8 } as const;
+
+/**
+ * Turns the time-of-day gate off or on.
+ *
+ * This is the only gate that can be disabled outright, and only because it
+ * protects the recipient's evening rather than the integrity of the send.
+ * Every other gate - kill switch, caps, minimum gap, suppression, approval,
+ * sender configuration - stays in force regardless.
+ */
+export async function setQuietHours(enabled: boolean, window = QUIET_HOURS_DEFAULT) {
+  const store = await getStore();
+  return store.updateEngineState(enabled ? { ...window } : { ...QUIET_HOURS_OFF });
 }
 
 /** Address the engine may actually send to: verified, and never invented. */

@@ -92,6 +92,12 @@ export function LimitsForm({ limits }: {
 }) {
   const { busy, error, run } = useAction();
   const [v, setV] = useState(limits);
+  // start === end disables the window; the checkbox makes that visible rather
+  // than leaving it as a numeric trick only the code knows about.
+  const quietOn = v.quiet_hours_start !== v.quiet_hours_end;
+  const toggleQuiet = (on: boolean) => setV(on
+    ? { ...v, quiet_hours_start: 20, quiet_hours_end: 8 }
+    : { ...v, quiet_hours_start: 0, quiet_hours_end: 0 });
   const field = (key: keyof typeof limits, label: string) => (
     <label className="small muted">
       {label}<br />
@@ -107,12 +113,19 @@ export function LimitsForm({ limits }: {
         {field('daily_send_cap', 'Per day')}
         {field('hourly_send_cap', 'Per run')}
         {field('min_seconds_between_sends', 'Min gap (s)')}
-        {field('quiet_hours_start', 'Quiet from')}
-        {field('quiet_hours_end', 'Quiet until')}
+        {quietOn && field('quiet_hours_start', 'Quiet from')}
+        {quietOn && field('quiet_hours_end', 'Quiet until')}
         <button disabled={busy} onClick={() => run(() => post('/api/engine/killswitch', { limits: v }))}>
           Save limits
         </button>
       </div>
+      <label className="row small" style={{ gap: 6, marginTop: 10 }}>
+        <input type="checkbox" checked={quietOn} onChange={(e) => toggleQuiet(e.target.checked)} />
+        Respect quiet hours (sender local time)
+        {!quietOn && (
+          <span className="pill warn">OFF — time of day will not block sending</span>
+        )}
+      </label>
       {error && <div className="banner bad" style={{ marginTop: 8 }}>{error}</div>}
     </>
   );
