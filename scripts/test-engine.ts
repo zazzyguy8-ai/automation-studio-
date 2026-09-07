@@ -18,13 +18,18 @@ import { demoCompanies, demoSearchFetch, demoSiteFetcher } from '@/lib/engine/de
 import { engineDashboard } from '@/lib/engine/dashboard';
 import { checkSendGate, inQuietHours, setKillSwitch } from '@/lib/engine/guards';
 import { classifyReply, handleReply } from '@/lib/engine/replies';
-import { runSendQueue } from '@/lib/engine/send';
+import { runSendQueue, senderConfigProblems, previewMessage } from '@/lib/engine/send';
 import { DryRunEmailAdapter } from '@/lib/engine/channels/email';
 import { SmsAdapter } from '@/lib/engine/channels/sms';
 import { VoiceAdapter } from '@/lib/engine/channels/voice';
 import { FOLLOW_UP_DAYS, MAX_FOLLOW_UPS } from '@/lib/engine/sequence';
 import { approveOutreachForLead } from '@/lib/outreach/build';
 import type { Campaign } from '@/lib/types';
+
+// A configured sender, because an email cannot be approved without one.
+process.env.SENDER_EMAIL = 'richard@mail.test.invalid';
+process.env.SENDER_NAME = 'Richard';
+process.env.SENDER_COMPANY = 'Automation Studio';
 
 const DATA_FILE = join(process.cwd(), '.data', 'test-engine.json');
 process.env.DATA_FILE = DATA_FILE;
@@ -81,6 +86,41 @@ function testGuardUnits() {
     classifyReply(null, 'hmm').cls === 'question');
   check('opt-out beats interest when both appear',
     classifyReply(null, 'sounds interesting but please remove me').cls === 'unsubscribe');
+}
+
+function testSenderConfig() {
+  section('2a. Sender configuration gate');
+  const saved = { ...process.env };
+  const set = (env: Record<string, string | undefined>) => {
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  };
+  try {
+    set({ SENDER_EMAIL: undefined, SENDER_NAME: undefined, UNSUBSCRIBE_ADDRESS: undefined });
+    check('an unconfigured sender is reported', senderConfigProblems().length >= 2);
+    check('and produces no footer', previewMessage('body').footer === null);
+
+    set({ SENDER_EMAIL: 'noreply@mail.test.invalid', SENDER_NAME: 'Richard' });
+    check('a noreply@ sender is rejected',
+      senderConfigProblems().some((p) => /no-reply/i.test(p)));
+
+    set({ SENDER_EMAIL: 'not-an-address', SENDER_NAME: 'Richard' });
+    check('a malformed sender address is rejected',
+      senderConfigProblems().some((p) => /not a valid address/i.test(p)));
+
+    set({ SENDER_EMAIL: 'richard@mail.test.invalid', SENDER_NAME: 'Richard', SENDER_COMPANY: 'Automation Studio' });
+    check('a correct sender passes', senderConfigProblems().length === 0);
+    const preview = previewMessage('body');
+    check('the preview carries the footer', preview.footer !== null);
+    check('the footer names the opt-out address',
+      preview.text.includes('richard@mail.test.invalid'));
+    check('the footer names the sender', preview.text.includes('Richard'));
+    check('the preview is body + footer, i.e. what actually sends',
+      preview.text.startsWith('body') && preview.text.includes('unsubscribe'));
+  } finally {
+    set(saved as Record<string, string | undefined>);
+  }
 }
 
 function testChannelArchitecture() {
@@ -379,6 +419,7 @@ async function main() {
   console.log('Outreach engine end-to-end (50 demo leads, offline, dry-run sending)');
 
   testGuardUnits();
+  testSenderConfig();
   testChannelArchitecture();
 
   const campaign = await makeCampaign();

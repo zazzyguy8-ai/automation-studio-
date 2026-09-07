@@ -1,6 +1,7 @@
 import { getStore } from '@/lib/db';
 import { getProvider } from '@/lib/llm';
 import { getMarket, type Market } from '@/lib/discovery/markets';
+import { senderConfigProblems } from '@/lib/engine/send';
 import type { Audit, Channel, Demo, Lead, OutreachMessage } from '@/lib/types';
 
 export interface Sender {
@@ -72,6 +73,14 @@ export function outreachBlockers(message: OutreachMessage, lead: Lead): string[]
   if (!message.body.toLowerCase().includes(lead.company_name.toLowerCase().split(' ')[0].toLowerCase())
       && !message.body.includes(new URL(lead.website).hostname.replace(/^www\./, ''))) {
     blockers.push('Message never names the company or its site - it would read as a mass send.');
+  }
+  // Every mapped market requires sender identity and a working opt-out. Those
+  // come from the sender configuration, not from the copy, so a misconfigured
+  // install must not be able to approve an email at all.
+  if (message.channel === 'email') {
+    for (const problem of senderConfigProblems()) {
+      blockers.push(`Sender not configured: ${problem}`);
+    }
   }
   if (message.channel === 'email' && message.body.split(/\s+/).length > 220) {
     blockers.push('Email is over 220 words.');

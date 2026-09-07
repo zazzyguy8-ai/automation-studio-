@@ -22,6 +22,11 @@ import { approveOutreachForLead, reviewOutreach } from '@/lib/outreach/build';
 import { getStore } from '@/lib/db';
 import type { OutreachMessage } from '@/lib/types';
 
+// A configured sender, because an email cannot be approved without one.
+process.env.SENDER_EMAIL = 'richard@mail.test.invalid';
+process.env.SENDER_NAME = 'Richard';
+process.env.SENDER_COMPANY = 'Automation Studio';
+
 const DATA_FILE = join(process.cwd(), '.data', 'test-discovery.json');
 process.env.DATA_FILE = DATA_FILE;
 

@@ -1,6 +1,6 @@
 import { getStore } from '@/lib/db';
 import { engineDashboard } from '@/lib/engine/dashboard';
-import { pickEmailAdapter } from '@/lib/engine/send';
+import { pickEmailAdapter, previewMessage, senderConfigProblems } from '@/lib/engine/send';
 import { reviewOutreach } from '@/lib/outreach/build';
 import { OutreachControls } from '@/components/lead-actions';
 import {
@@ -23,6 +23,7 @@ export default async function EnginePage() {
   const suppressions = await store.listSuppressions();
   const leads = (await store.listLeads()).slice(0, 60);
   const dryRun = pickEmailAdapter().name === 'dry-run';
+  const configProblems = senderConfigProblems();
 
   return (
     <>
@@ -33,6 +34,19 @@ export default async function EnginePage() {
       </p>
 
       <KillSwitch on={d.engine.kill_switch} reason={d.engine.kill_switch_reason} />
+
+      {configProblems.length > 0 && (
+        <div className="banner bad">
+          <strong>Sender not configured — email approval is blocked</strong>
+          <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+            {configProblems.map((p, i) => <li key={i} className="small">{p}</li>)}
+          </ul>
+          <div className="small muted" style={{ marginTop: 8 }}>
+            Set these in <span className="mono">.env.local</span> and restart. Without them the
+            opt-out names no address, which every market this system maps requires.
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <RunButtons dryRun={dryRun} />
@@ -106,7 +120,12 @@ export default async function EnginePage() {
               )}
             </div>
             {message.subject && <p style={{ marginBottom: 4 }}><strong>{message.subject}</strong></p>}
-            <p className="small" style={{ whiteSpace: 'pre-wrap' }}>{message.body}</p>
+            <p className="small" style={{ whiteSpace: 'pre-wrap' }}>{previewMessage(message.body).text}</p>
+            <div className="small muted">
+              {previewMessage(message.body).footer
+                ? 'Above is the complete message, footer included — exactly what would be sent.'
+                : 'No footer: the sender is not configured, so this cannot be approved.'}
+            </div>
             <details>
               <summary className="small muted" style={{ cursor: 'pointer' }}>grounded in</summary>
               <ul style={{ margin: '6px 0 0', paddingLeft: 18 }} className="small muted">

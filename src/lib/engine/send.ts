@@ -23,15 +23,64 @@ export function pickEmailAdapter(): ChannelAdapter {
   return new DryRunEmailAdapter();
 }
 
-export function unsubscribeFooter(): string {
+/**
+ * What is missing before this install may send a compliant email.
+ *
+ * These are blockers, not warnings. Without a real sender address the footer
+ * reads "reply to this email to reply to this email", the From header is
+ * noreply@example.invalid, and the opt-out does not work - which is the one
+ * thing every market in markets.ts requires.
+ */
+export function senderConfigProblems(): string[] {
+  const problems: string[] = [];
+  const from = process.env.SENDER_EMAIL;
+  const unsub = process.env.UNSUBSCRIBE_ADDRESS ?? from;
+
+  if (!from) {
+    problems.push('SENDER_EMAIL is not set - the From header would be noreply@example.invalid.');
+  } else if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(from)) {
+    problems.push(`SENDER_EMAIL ("${from}") is not a valid address.`);
+  } else if (/^(noreply|no-reply|donotreply)@/i.test(from)) {
+    problems.push(`SENDER_EMAIL ("${from}") is a no-reply address. Cold outreach needs replies to reach you.`);
+  }
+
+  if (!unsub) {
+    problems.push('Neither UNSUBSCRIBE_ADDRESS nor SENDER_EMAIL is set - the opt-out would name no address.');
+  }
+  if (!process.env.SENDER_NAME) {
+    problems.push('SENDER_NAME is not set - the message would be signed with the default placeholder.');
+  }
+  return problems;
+}
+
+/**
+ * The footer appended to every outbound email.
+ *
+ * Returns null when the configuration cannot produce a working opt-out, so
+ * callers fail loudly instead of shipping a broken one.
+ */
+export function unsubscribeFooter(): string | null {
+  if (senderConfigProblems().length > 0) return null;
   const sender = senderFromEnv();
-  const address = process.env.UNSUBSCRIBE_ADDRESS ?? process.env.SENDER_EMAIL ?? 'reply to this email';
+  const address = process.env.UNSUBSCRIBE_ADDRESS ?? process.env.SENDER_EMAIL!;
   const postal = process.env.SENDER_POSTAL_ADDRESS;
   return [
     `${sender.name}, ${sender.company}`,
     postal ?? null,
     `Not relevant? Reply "unsubscribe" to ${address} and I will not contact you again.`,
   ].filter(Boolean).join('\n');
+}
+
+/**
+ * Exactly what would leave the machine, footer included.
+ *
+ * The approval screen shows this rather than the bare body: approving a draft
+ * whose visible text is not what actually gets sent makes the approval
+ * meaningless.
+ */
+export function previewMessage(body: string): { text: string; footer: string | null } {
+  const footer = unsubscribeFooter();
+  return { text: footer ? `${body}\n\n${footer}` : body, footer };
 }
 
 export interface SendRunResult {
@@ -78,6 +127,15 @@ export async function runSendQueue(opts: SendRunOptions = {}): Promise<SendRunRe
     return result;
   }
 
+  const configProblems = senderConfigProblems();
+  if (configProblems.length > 0) {
+    result.halted = {
+      code: 'sender_not_configured',
+      reason: `Cannot send a compliant email: ${configProblems.join(' ')}`,
+    };
+    return result;
+  }
+
   const queue = await store.listSendable(now.toISOString(), opts.limit ?? 50);
 
   for (const message of queue) {
@@ -109,7 +167,8 @@ export async function runSendQueue(opts: SendRunOptions = {}): Promise<SendRunRe
       lead,
       to,
       from: { name: sender.name, address: fromAddress },
-      unsubscribe_footer: unsubscribeFooter(),
+      // Non-null: senderConfigProblems() was checked before the loop.
+      unsubscribe_footer: unsubscribeFooter()!,
     });
 
     if (!send.ok) {

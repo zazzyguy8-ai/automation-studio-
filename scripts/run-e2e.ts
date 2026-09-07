@@ -21,6 +21,11 @@ import { fixtureFetcher } from '@/lib/scrape/fixture-fetcher';
 import { paybackMonths } from '@/lib/estimate/model';
 import { getMarket } from '@/lib/discovery/markets';
 
+// A configured sender, because an email cannot be approved without one.
+process.env.SENDER_EMAIL = 'richard@mail.test.invalid';
+process.env.SENDER_NAME = 'Richard';
+process.env.SENDER_COMPANY = 'Automation Studio';
+
 // The e2e run gets its own data file so it never touches the working store.
 process.env.DATA_FILE = join(process.cwd(), '.data', 'e2e.json');
 
