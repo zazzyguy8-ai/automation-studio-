@@ -3,6 +3,7 @@ import { buildBlueprint } from '@/lib/blueprint/build';
 import { getStore } from '@/lib/db';
 import { buildDemo } from '@/lib/demo/build';
 import { paybackMonths } from '@/lib/estimate/model';
+import { DEFAULT_AUDIT_MODEL, resolveModel } from '@/lib/llm/models';
 import { buildOutreachSequence } from '@/lib/outreach/build';
 import { fixtureFetcher } from '@/lib/scrape/fixture-fetcher';
 import { CrawlError, type Fetcher } from '@/lib/scrape/crawl';
@@ -62,13 +63,14 @@ export interface PipelineFailure {
 
 export type PipelineOutcome = PipelineSuccess | PipelineFailure;
 
-export function activeProvider(): { name: string; model: string } {
+export function activeProvider(): { name: string; model: string; problem: string | null } {
   const forced = process.env.REASONING_PROVIDER;
   const name = forced ?? (process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'heuristic');
-  return {
-    name,
-    model: name === 'anthropic' ? (process.env.AUDIT_MODEL ?? 'claude-opus-5') : 'heuristic',
-  };
+  if (name !== 'anthropic') return { name, model: 'heuristic', problem: null };
+  // Reporting path, so it reports the misconfiguration instead of throwing on
+  // it - `status` has to stay readable precisely when the config is wrong.
+  const { model, problem } = resolveModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL);
+  return { name, model, problem };
 }
 
 function crawlHint(err: CrawlError): string {

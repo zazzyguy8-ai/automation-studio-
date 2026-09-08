@@ -30,6 +30,10 @@ async function main() {
   console.log(provider.name === 'heuristic'
     ? 'reasoning: heuristic (no ANTHROPIC_API_KEY in env or .env.local) - audits will be thinner'
     : `reasoning: ${provider.name} (${provider.model})`);
+  if (provider.problem) {
+    console.log(`WARNING: ${provider.problem}`);
+    console.log(`Falling back to ${provider.model}.`);
+  }
   console.log(`Auditing ${args.website}${args.fixture ? ' [offline fixture]' : ''} …`);
 
   const run = await runPipeline(args);

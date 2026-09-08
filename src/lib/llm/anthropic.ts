@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { AuditResultSchema, type AuditResult, type Lead } from '@/lib/types';
 import { AUDIT_SYSTEM, COPY_SYSTEM, auditUserPrompt, siteDigest } from './prompts';
+import { DEFAULT_AUDIT_MODEL, DEFAULT_COPY_MODEL, requireModel } from './models';
 import type { AuditInput, CopyInput, CopyOutput, ReasoningProvider } from './provider';
 
 /** JSON Schema mirrors of the zod contracts. Claude is forced through a tool
@@ -162,8 +163,10 @@ export class AnthropicProvider implements ReasoningProvider {
     const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
     this.client = new Anthropic({ apiKey, ...(opts.fetch ? { fetch: opts.fetch } : {}) });
-    this.auditModel = process.env.AUDIT_MODEL ?? 'claude-opus-5';
-    this.copyModel = process.env.COPY_MODEL ?? 'claude-sonnet-5';
+    // Resolved in the constructor, not per request: a bad AUDIT_MODEL should
+    // fail here rather than as a 404 partway through a live audit.
+    this.auditModel = requireModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL);
+    this.copyModel = requireModel('COPY_MODEL', DEFAULT_COPY_MODEL);
   }
 
   async analyzeBusiness({ lead, snapshot }: AuditInput): Promise<AuditResult> {

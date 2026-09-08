@@ -127,6 +127,10 @@ async function run(demo: boolean) {
   console.log(`ICP:       ${icp.name}`);
   console.log(`Target:    ${TARGET} leads across ${icp.cities.length} cities`);
   console.log(`Reasoning: ${provider.name} (${provider.model})`);
+  if (provider.problem) {
+    console.log(`WARNING: ${provider.problem}`);
+    console.log(`Falling back to ${provider.model}.`);
+  }
   if (provider.name === 'heuristic') {
     console.log('\nWARNING: no ANTHROPIC_API_KEY. The heuristic analyst pattern-matches where');
     console.log('Claude reads. For a real experiment the audit quality IS the offer - set the key.');

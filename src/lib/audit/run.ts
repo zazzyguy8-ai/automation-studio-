@@ -1,6 +1,7 @@
 import { getStore } from '@/lib/db';
 import { getProvider } from '@/lib/llm';
 import { rank } from '@/lib/llm/heuristic';
+import { auditModel } from '@/lib/llm/models';
 import { contactsFromSnapshot, crawlSite, mergeContacts, normalizeUrl, sizeHint, type Fetcher } from '@/lib/scrape/crawl';
 import type { Audit, Lead, Snapshot } from '@/lib/types';
 import { gateAudit } from './gate';
@@ -55,7 +56,7 @@ export async function runAudit(req: AuditRequest): Promise<AuditRun> {
 
   const snapshot = await store.insertSnapshot({ ...crawled, lead_id: lead.id });
   const provider = getProvider();
-  const model = provider.name === 'anthropic' ? (process.env.AUDIT_MODEL ?? 'claude-opus-5') : 'heuristic';
+  const model = provider.name === 'anthropic' ? auditModel() : 'heuristic';
 
   let audit: Audit;
   try {

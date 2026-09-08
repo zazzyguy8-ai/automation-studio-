@@ -12,6 +12,9 @@ import { join } from 'node:path';
 
 import { PipelineArgsError, parsePipelineArgs } from '@/lib/pipeline/args';
 import { activeProvider, runPipeline, verifyPersisted } from '@/lib/pipeline/run';
+import {
+  DEFAULT_AUDIT_MODEL, DEFAULT_COPY_MODEL, SUPPORTED_MODELS, requireModel, resolveModel,
+} from '@/lib/llm/models';
 import { fixtureFetcher } from '@/lib/scrape/fixture-fetcher';
 import { getStore } from '@/lib/db';
 import type { Fetcher } from '@/lib/scrape/crawl';
@@ -101,6 +104,7 @@ function testProvider() {
     const withKey = activeProvider();
     check('uses Claude when a key is present', withKey.name === 'anthropic', withKey.name);
     check('reports the audit model', withKey.model === 'claude-opus-5', withKey.model);
+    check('reports no model problem when unset', withKey.problem === null, String(withKey.problem));
 
     process.env.REASONING_PROVIDER = 'heuristic';
     check('REASONING_PROVIDER overrides the key', activeProvider().name === 'heuristic');
@@ -109,6 +113,107 @@ function testProvider() {
     delete process.env.REASONING_PROVIDER;
     if (ANTHROPIC_API_KEY) process.env.ANTHROPIC_API_KEY = ANTHROPIC_API_KEY;
     if (REASONING_PROVIDER) process.env.REASONING_PROVIDER = REASONING_PROVIDER;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 2a — model configuration                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Regression cover for the AUDIT_MODEL 404.
+ *
+ * The old code was `process.env.AUDIT_MODEL ?? 'claude-opus-5'`. `??` only
+ * falls back on undefined, so every malformed value below was passed straight
+ * to the API and came back as a 404 naming a model nobody had typed on
+ * purpose. Each case here is one of the ways that happened.
+ */
+function testModelConfig() {
+  section('2a. Model configuration');
+  const original = process.env.AUDIT_MODEL;
+  const set = (v: string | undefined) => {
+    if (v === undefined) delete process.env.AUDIT_MODEL;
+    else process.env.AUDIT_MODEL = v;
+  };
+
+  try {
+    set(undefined);
+    check('unset uses the intended default', resolveModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL).model === 'claude-opus-5');
+    check('the two defaults are supported ids',
+      (SUPPORTED_MODELS as readonly string[]).includes(DEFAULT_AUDIT_MODEL)
+      && (SUPPORTED_MODELS as readonly string[]).includes(DEFAULT_COPY_MODEL));
+
+    // `AUDIT_MODEL=` in a .env file - the single most likely way to get here.
+    set('');
+    const empty = resolveModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL);
+    check('empty value falls back rather than sending ""', empty.model === 'claude-opus-5', empty.model);
+    check('empty value is not reported as a problem', empty.problem === null);
+
+    // A trailing space in an env file is invisible and reaches the API.
+    set('  claude-opus-5  ');
+    const padded = resolveModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL);
+    check('surrounding whitespace is trimmed, not rejected', padded.model === 'claude-opus-5', padded.model);
+    check('a trimmed valid id is not a problem', padded.problem === null);
+
+    // The exact reported failure: a truncated paste.
+    set('claude-opus-');
+    const truncated = resolveModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL);
+    check('truncated id never reaches the API', truncated.model === 'claude-opus-5', truncated.model);
+    check('truncated id is diagnosed as truncated',
+      truncated.problem?.includes('looks truncated') === true, String(truncated.problem));
+
+    set('claude-opus-5-20260401');
+    const dated = resolveModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL);
+    check('date-suffixed id is rejected', dated.model === 'claude-opus-5', dated.model);
+    check('date-suffixed id names the id to use instead',
+      dated.problem?.includes('use "claude-opus-5"') === true, String(dated.problem));
+
+    set('claude opus 5');
+    check('whitespace inside the name is rejected',
+      resolveModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL).problem?.includes('whitespace') === true);
+
+    set('gpt-4');
+    const foreign = resolveModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL);
+    check('an unsupported id is rejected', foreign.problem !== null);
+    check('the rejection lists what is supported',
+      foreign.problem?.includes('claude-opus-5') === true, String(foreign.problem));
+
+    // A deliberate, valid override must still work.
+    set('claude-sonnet-5');
+    const override = resolveModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL);
+    check('a supported override is honoured', override.model === 'claude-sonnet-5', override.model);
+    check('a supported override is not a problem', override.problem === null);
+
+    // requireModel is what the provider uses: it must refuse, not fall back,
+    // so a wrong config cannot masquerade as the model the operator set.
+    set('claude-opus-');
+    let refused: string | null = null;
+    try {
+      requireModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL);
+    } catch (err) {
+      refused = err instanceof Error ? err.message : String(err);
+    }
+    check('requireModel refuses a bad override rather than falling back',
+      refused !== null && /truncated/.test(refused), String(refused));
+    set('claude-opus-5');
+    check('requireModel returns a good override', requireModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL) === 'claude-opus-5');
+
+    // activeProvider is a reporting path: it must surface the problem, never
+    // throw, or `status` dies on the misconfiguration it exists to show.
+    const key = process.env.ANTHROPIC_API_KEY;
+    try {
+      process.env.ANTHROPIC_API_KEY = 'test-key-not-real';
+      set('claude-opus-');
+      const reported = activeProvider();
+      check('activeProvider does not throw on a bad model', reported.name === 'anthropic');
+      check('activeProvider reports the problem', reported.problem !== null, String(reported.problem));
+      check('activeProvider still reports a usable model', reported.model === 'claude-opus-5', reported.model);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+      if (key) process.env.ANTHROPIC_API_KEY = key;
+    }
+  } finally {
+    set(original);
   }
 }
 
@@ -292,6 +397,7 @@ async function main() {
 
   testArgs();
   testProvider();
+  testModelConfig();
   const run = await testFullRun();
   if (run) await testPersistence(run);
   await testFailures();
