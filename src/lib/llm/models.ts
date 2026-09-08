@@ -97,3 +97,28 @@ export function requireModel(envName: string, fallback: SupportedModel): string 
 
 export const auditModel = () => requireModel('AUDIT_MODEL', DEFAULT_AUDIT_MODEL);
 export const copyModel = () => requireModel('COPY_MODEL', DEFAULT_COPY_MODEL);
+
+/**
+ * Per-model request capabilities.
+ *
+ * These differ across the supported set in ways that are not cosmetic:
+ * `thinking: {type:'adaptive'}` and `output_config.effort` are accepted by the
+ * 5-series models and rejected by Haiku 4.5, which still takes the older
+ * `budget_tokens` shape. Sending the wrong one is a 400, so the request
+ * builder has to ask rather than assume.
+ */
+export interface ModelCapabilities {
+  /** Accepts `thinking: {type:'adaptive'}` and `output_config.effort`. */
+  adaptiveThinking: boolean;
+}
+
+const CAPABILITIES: Record<SupportedModel, ModelCapabilities> = {
+  'claude-opus-5': { adaptiveThinking: true },
+  'claude-sonnet-5': { adaptiveThinking: true },
+  'claude-haiku-4-5': { adaptiveThinking: false },
+};
+
+/** Unknown models are treated as the conservative case - send neither. */
+export function capabilities(model: string): ModelCapabilities {
+  return CAPABILITIES[model as SupportedModel] ?? { adaptiveThinking: false };
+}

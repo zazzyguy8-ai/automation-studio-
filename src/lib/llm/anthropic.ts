@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ZodError } from 'zod';
 import { AuditResultSchema, type AuditResult, type Lead } from '@/lib/types';
 import { AUDIT_SYSTEM, COPY_SYSTEM, auditUserPrompt, siteDigest } from './prompts';
-import { DEFAULT_AUDIT_MODEL, DEFAULT_COPY_MODEL, requireModel } from './models';
+import { DEFAULT_AUDIT_MODEL, DEFAULT_COPY_MODEL, capabilities, requireModel } from './models';
 import type { AuditInput, CopyInput, CopyOutput, ReasoningProvider } from './provider';
 
 /** JSON Schema mirrors of the zod contracts. Claude is forced through a tool
@@ -149,13 +149,60 @@ const DEMO_TOOL: Anthropic.Tool = {
  * a tool_use block with an empty `input`.
  */
 const MAX_TOKENS = {
-  /** Roughly double what a rich audit measures at, so a wordy site has room. */
-  audit: 16000,
+  /**
+   * Has to cover thinking AND the audit, because they share this budget.
+   *
+   * A full audit for a content-heavy site measures around 8-10k tokens on its
+   * own. Adaptive thinking on a hard analysis task can consume as much again
+   * before a single character of tool input is written. 16000 left too little
+   * margin: the thinking finished, the tool input started, and generation ran
+   * out partway through - which the API returns as a tool_use block whose
+   * input is incomplete.
+   *
+   * A budget this size forces streaming: the SDK refuses a non-streaming call
+   * that could exceed its ten-minute ceiling ("Streaming is required for
+   * operations that may take longer than 10 minutes"). The audit is therefore
+   * the one call here that streams. Copy and demo are small enough to stay on
+   * the plain request.
+   */
+  audit: 32000,
   /** One short message. */
   copy: 1500,
   /** A 60-120 second script. */
   demo: 2500,
 } as const;
+
+/**
+ * Thinking and effort, stated explicitly rather than left to the default.
+ *
+ * This is the fix for a defect that had no visible cause: the request set
+ * neither, and the meaning of "neither" changed underneath the code. On Opus
+ * 4.7/4.8 omitting `thinking` meant no thinking at all. On Opus 5 - the model
+ * this project actually runs - omitting it runs adaptive thinking, and those
+ * tokens come out of the same max_tokens budget as the answer. The request
+ * looked unchanged while quietly acquiring a second, unbounded consumer of
+ * its output budget.
+ *
+ * Note what is deliberately NOT done here: thinking is not disabled to
+ * reclaim the budget. With thinking off, Opus 5 sometimes writes a tool call
+ * into its visible text instead of emitting a tool_use block - the turn
+ * succeeds, the call never runs, and nothing raises. That is the same
+ * "no complete tool input" symptom, arrived at from the other direction.
+ * Headroom is the fix; switching thinking off is not.
+ */
+function reasoningParams(model: string, effort: 'medium' | 'high') {
+  if (!capabilities(model).adaptiveThinking) return {};
+  // The installed SDK (0.65.0) predates both parameters - its ThinkingConfig
+  // knows only enabled/disabled and it has no output_config at all - so the
+  // local types cannot express a request the API accepts. The SDK serializes
+  // whatever params object it is handed, so these still reach the wire; the
+  // wiring test asserts that rather than trusting it. Upgrading the SDK is the
+  // proper fix and is a change of its own, not a rider on this one.
+  return {
+    thinking: { type: 'adaptive' },
+    output_config: { effort },
+  } as unknown as Record<string, unknown>;
+}
 
 /**
  * Pulls the arguments out of a forced tool call, refusing anything that is not
@@ -261,9 +308,13 @@ export class AnthropicProvider implements ReasoningProvider {
   }
 
   async analyzeBusiness({ lead, snapshot }: AuditInput): Promise<AuditResult> {
-    const message = await this.client.messages.create({
+    // Streamed, then collapsed back to a single message: nothing here consumes
+    // partial output, so the stream exists only to satisfy the SDK's long
+    // request rule. finalMessage() reassembles the tool input from the deltas.
+    const message = await this.client.messages.stream({
       model: this.auditModel,
       max_tokens: MAX_TOKENS.audit,
+      ...reasoningParams(this.auditModel, 'high'),
       system: AUDIT_SYSTEM,
       tools: [AUDIT_TOOL],
       tool_choice: { type: 'tool', name: 'submit_audit' },
@@ -271,7 +322,7 @@ export class AnthropicProvider implements ReasoningProvider {
         role: 'user',
         content: auditUserPrompt(lead.company_name, lead.website, lead.industry, lead.country, siteDigest(snapshot)),
       }],
-    });
+    }).finalMessage();
     return parseToolResult(AuditResultSchema, toolResult(message, 'submit_audit'), 'submit_audit');
   }
 
@@ -285,6 +336,7 @@ export class AnthropicProvider implements ReasoningProvider {
     const message = await this.client.messages.create({
       model: this.copyModel,
       max_tokens: MAX_TOKENS.copy,
+      ...reasoningParams(this.copyModel, 'medium'),
       system: COPY_SYSTEM,
       tools: [COPY_TOOL],
       tool_choice: { type: 'tool', name: 'submit_message' },
@@ -316,6 +368,7 @@ Sender: ${sender.name}, ${sender.company}. Booking link: ${sender.calendar_url}`
     const message = await this.client.messages.create({
       model: this.copyModel,
       max_tokens: MAX_TOKENS.demo,
+      ...reasoningParams(this.copyModel, 'medium'),
       system: `You script 60-120 second screen-recorded demos for a one-person AI automation agency.
 The viewer is the business owner. The demo shows THEIR workflow, using THEIR service names and THEIR wording.
 Never state a number as a measurement of their business. Estimates must be spoken as estimates.

@@ -25,14 +25,70 @@ const check = (label: string, ok: boolean, detail = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` - ${detail}` : ''}`);
 };
 
+/**
+ * Builds a server-sent event stream carrying one tool_use block.
+ *
+ * The audit call streams - a budget that large is refused on a plain request -
+ * so the stub has to speak SSE for that path. The tool input is delivered as
+ * input_json_delta chunks, exactly as the API sends it, so the SDK's own
+ * accumulator is what reassembles it. Splitting the JSON across several deltas
+ * is deliberate: a stub that sent it in one piece would not exercise that
+ * reassembly at all.
+ */
+function sseBody(opts: {
+  model: string; toolName: string; input?: unknown; stopReason?: string; outputTokens?: number;
+  omitInput?: boolean;
+  /** No tool_use block at all - what a refusal looks like. */
+  noToolBlock?: boolean;
+}) {
+  const events: string[] = [];
+  const push = (type: string, data: Record<string, unknown>) =>
+    events.push(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+
+  push('message_start', {
+    message: {
+      id: 'msg_stub', type: 'message', role: 'assistant', model: opts.model,
+      content: [], stop_reason: null, stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 0 },
+    },
+  });
+  if (!opts.noToolBlock) {
+    push('content_block_start', {
+      index: 0,
+      content_block: { type: 'tool_use', id: 'tu_stub', name: opts.toolName, input: {} },
+    });
+  }
+  if (!opts.noToolBlock && !opts.omitInput) {
+    const json = JSON.stringify(opts.input ?? {});
+    for (let i = 0; i < json.length; i += 400) {
+      push('content_block_delta', {
+        index: 0, delta: { type: 'input_json_delta', partial_json: json.slice(i, i + 400) },
+      });
+    }
+  }
+  if (!opts.noToolBlock) push('content_block_stop', { index: 0 });
+  push('message_delta', {
+    delta: { stop_reason: opts.stopReason ?? 'tool_use', stop_sequence: null },
+    usage: { output_tokens: opts.outputTokens ?? 1 },
+  });
+  push('message_stop', {});
+  return events.join('');
+}
+
 /** Captures what the SDK actually put on the wire, and replies with a
- *  well-formed tool_use response built from `reply`. */
+ *  well-formed tool_use response built from `reply` - as SSE when the request
+ *  asked to stream, as plain JSON otherwise. */
 function stubTransport(reply: (body: Record<string, unknown>) => unknown) {
   const seen: Array<Record<string, unknown>> = [];
   const impl = (async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? '{}'));
     seen.push(body);
     const toolName = (body.tool_choice as { name?: string } | undefined)?.name ?? 'submit_audit';
+    if (body.stream) {
+      return new Response(sseBody({ model: String(body.model), toolName, input: reply(body) }), {
+        status: 200, headers: { 'content-type': 'text/event-stream' },
+      });
+    }
     return new Response(JSON.stringify({
       id: 'msg_stub',
       type: 'message',
@@ -100,15 +156,18 @@ function auditFor(snapshot: Snapshot) {
 /** Replies with an arbitrary stop_reason and tool input, so the truncated and
  *  refused responses can be exercised - shapes the well-formed stub above
  *  cannot produce. */
-function rawTransport(opts: { stopReason: string; input?: unknown; outputTokens?: number; content?: unknown[] }) {
+function rawTransport(opts: {
+  stopReason: string; input?: unknown; outputTokens?: number;
+  omitInput?: boolean; noToolBlock?: boolean;
+}) {
   return (async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? '{}'));
-    return new Response(JSON.stringify({
-      id: 'msg_stub', type: 'message', role: 'assistant', model: body.model,
-      stop_reason: opts.stopReason, stop_sequence: null,
-      usage: { input_tokens: 1, output_tokens: opts.outputTokens ?? 8000 },
-      content: opts.content ?? [{ type: 'tool_use', id: 'tu', name: 'submit_audit', input: opts.input ?? {} }],
-    }), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(sseBody({
+      model: String(body.model), toolName: 'submit_audit',
+      input: opts.input, stopReason: opts.stopReason,
+      outputTokens: opts.outputTokens ?? 8000,
+      omitInput: opts.omitInput, noToolBlock: opts.noToolBlock,
+    }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
   }) as unknown as typeof fetch;
 }
 
@@ -221,14 +280,44 @@ async function main() {
   check('novak-reality: the recommendation points at a real opportunity',
     novaResult.opportunities.some((o) => o.id === novaResult.recommended_opportunity_id));
 
-  // The budget is what actually prevents the truncation; assert it on the wire
-  // rather than trusting the constant.
+  // Everything that keeps the tool input from being cut off is a property of
+  // the request, so it is asserted on the wire rather than trusted as a
+  // constant. Thinking is the one that had no visible cause: the request set
+  // nothing, and on Opus 5 "nothing" means adaptive thinking is on and is
+  // spending the same max_tokens budget as the answer.
   const novaReq = novaOk.seen[0];
-  check('the audit asks for enough output tokens to finish',
-    Number(novaReq.max_tokens) >= 16000, String(novaReq.max_tokens));
+  check('the audit asks for enough output tokens for thinking AND the audit',
+    Number(novaReq.max_tokens) >= 32000, String(novaReq.max_tokens));
+  check('the audit states its thinking mode instead of inheriting a default',
+    JSON.stringify(novaReq.thinking) === '{"type":"adaptive"}', JSON.stringify(novaReq.thinking));
+  check('the audit states its effort',
+    (novaReq.output_config as { effort?: string } | undefined)?.effort === 'high',
+    JSON.stringify(novaReq.output_config));
+  check('thinking is NOT disabled - that reintroduces the same symptom',
+    (novaReq.thinking as { type?: string } | undefined)?.type !== 'disabled');
+  check('a budget that large streams, as the SDK requires', novaReq.stream === true,
+    String(novaReq.stream));
+
+  // Haiku 4.5 rejects both parameters, so the request builder must leave them
+  // off rather than send a 400.
+  const haikuModel = process.env.AUDIT_MODEL;
+  process.env.AUDIT_MODEL = 'claude-haiku-4-5';
+  try {
+    const haiku = stubTransport(() => auditFor(novaSnapshot));
+    await new AnthropicProvider({ apiKey: 'test-key-not-real', fetch: haiku.impl })
+      .analyzeBusiness({ lead: novaLead, snapshot: novaSnapshot });
+    const hReq = haiku.seen[0];
+    check('a model without adaptive thinking is sent no thinking parameter',
+      hReq.thinking === undefined, JSON.stringify(hReq.thinking));
+    check('a model without adaptive thinking is sent no effort',
+      hReq.output_config === undefined, JSON.stringify(hReq.output_config));
+  } finally {
+    if (haikuModel === undefined) delete process.env.AUDIT_MODEL;
+    else process.env.AUDIT_MODEL = haikuModel;
+  }
 
   const cutOff = await auditError(
-    rawTransport({ stopReason: 'max_tokens', input: {} }), novaLead, novaSnapshot);
+    rawTransport({ stopReason: 'max_tokens', omitInput: true }), novaLead, novaSnapshot);
   check('a truncated response is reported as a budget problem',
     /max_tokens/.test(cutOff) && /cut off/.test(cutOff), cutOff);
   check('a truncated response is NOT reported as missing fields',
@@ -246,7 +335,7 @@ async function main() {
     /no arguments/.test(empty), empty);
 
   const refused = await auditError(
-    rawTransport({ stopReason: 'refusal', content: [] }), novaLead, novaSnapshot);
+    rawTransport({ stopReason: 'refusal', noToolBlock: true }), novaLead, novaSnapshot);
   check('a refusal is reported as a refusal', /refused/.test(refused), refused);
 
   // A genuinely wrong shape must still fail - but now legibly, naming the
