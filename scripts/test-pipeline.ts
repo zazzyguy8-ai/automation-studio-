@@ -6,12 +6,27 @@
  *
  * Runs offline against bundled fixtures and its own data file, so it never
  * touches the network or the working store.
+ *
+ * "Offline" is enforced, not assumed. getProvider() reaches for Claude
+ * whenever ANTHROPIC_API_KEY is set, which meant this suite quietly became a
+ * live, paid, non-deterministic test on any machine with a key in .env.local -
+ * the same code passing on one laptop and failing on another, for reasons that
+ * had nothing to do with the code. The fixture runs below therefore pin the
+ * heuristic provider.
+ *
+ * To exercise the same fixtures against the real model - which is a different
+ * question, and the only way to check the live request wiring:
+ *
+ *   TEST_LIVE_MODEL=1 npm run test:pipeline
+ *
+ * That costs money and can fail on model variation. It is opt-in for both
+ * reasons.
  */
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { PipelineArgsError, parsePipelineArgs } from '@/lib/pipeline/args';
-import { activeProvider, runPipeline, verifyPersisted } from '@/lib/pipeline/run';
+import { activeProvider, runPipeline, verifyPersisted, type PipelineOutcome } from '@/lib/pipeline/run';
 import {
   DEFAULT_AUDIT_MODEL, DEFAULT_COPY_MODEL, SUPPORTED_MODELS, requireModel, resolveModel,
 } from '@/lib/llm/models';
@@ -45,6 +60,20 @@ function throws(label: string, fn: () => unknown, expect?: RegExp) {
     const isArgsError = err instanceof PipelineArgsError;
     check(label, isArgsError && (!expect || expect.test(message)), message);
   }
+}
+
+
+/** Everything a failed run knows about itself, in one line. */
+function why(outcome: PipelineOutcome): string {
+  if (outcome.ok) return '';
+  const audit = outcome.audit;
+  return [
+    `stage=${outcome.stage}`,
+    outcome.reasons.length ? `reasons: ${outcome.reasons.join(' | ')}` : null,
+    audit?.error ? `audit error: ${audit.error}` : null,
+    audit?.gate_report?.length ? `gate: ${audit.gate_report.join(' | ')}` : null,
+    outcome.hint ? `hint: ${outcome.hint}` : null,
+  ].filter(Boolean).join(' · ');
 }
 
 /* ------------------------------------------------------------------ */
@@ -201,7 +230,12 @@ function testModelConfig() {
     // activeProvider is a reporting path: it must surface the problem, never
     // throw, or `status` dies on the misconfiguration it exists to show.
     const key = process.env.ANTHROPIC_API_KEY;
+    const forced = process.env.REASONING_PROVIDER;
     try {
+      // main() pins REASONING_PROVIDER=heuristic for the fixture runs; this
+      // block is asking what activeProvider() reports when Claude IS selected,
+      // so the pin has to come off for the duration.
+      delete process.env.REASONING_PROVIDER;
       process.env.ANTHROPIC_API_KEY = 'test-key-not-real';
       set('claude-opus-');
       const reported = activeProvider();
@@ -210,7 +244,9 @@ function testModelConfig() {
       check('activeProvider still reports a usable model', reported.model === 'claude-opus-5', reported.model);
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.REASONING_PROVIDER;
       if (key) process.env.ANTHROPIC_API_KEY = key;
+      if (forced) process.env.REASONING_PROVIDER = forced;
     }
   } finally {
     set(original);
@@ -228,10 +264,21 @@ async function testFullRun() {
   const run = await runPipeline({ ...args, source: 'test' });
 
   if (!run.ok) {
-    check('pipeline completes', false, run.reasons.join(' | '));
+    check('pipeline completes', false, why(run));
     return null;
   }
   check('pipeline completes', true);
+  // Proof that the suite is offline, not a promise that it is: the stored
+  // audit records which brain produced it. Without this, a key in .env.local
+  // silently turned every fixture run below into a live, paid, non-deterministic
+  // API call - the same code passing on one machine and failing on another.
+  check(process.env.TEST_LIVE_MODEL === '1'
+    ? 'LIVE MODE: the fixture audit really went to the model'
+    : 'no key in the environment can turn the fixture runs into live API calls',
+    process.env.TEST_LIVE_MODEL === '1'
+      ? run.audit.model !== 'heuristic'
+      : run.audit.model === 'heuristic',
+    run.audit.model);
 
   // Verified business problem.
   check('problem is grounded in a quote from the site', run.problem.evidence.length > 0);
@@ -393,11 +440,24 @@ async function testFailures() {
 
 async function main() {
   await rm(DATA_FILE, { force: true });
-  console.log('Pipeline tests (offline fixtures, isolated data file)');
+
+  // Pinned before any fixture run, and left pinned: testProvider() sets and
+  // restores this variable itself, so it must be re-pinned after it runs.
+  const live = process.env.TEST_LIVE_MODEL === '1';
+  const pinHeuristic = () => {
+    if (!live) process.env.REASONING_PROVIDER = 'heuristic';
+  };
+  pinHeuristic();
+
+  console.log(`Pipeline tests (offline fixtures, isolated data file)`);
+  console.log(live
+    ? 'LIVE MODE: fixture audits go to the real model. This costs money.'
+    : `reasoning: ${activeProvider().name} (pinned - set TEST_LIVE_MODEL=1 to use the real model)`);
 
   testArgs();
   testProvider();
   testModelConfig();
+  pinHeuristic();
   const run = await testFullRun();
   if (run) await testPersistence(run);
   await testFailures();
@@ -408,7 +468,7 @@ async function main() {
     ...parsePipelineArgs(['--fixture', 'praxis-lindner']),
     source: 'test',
   });
-  check('the clinic also produces a complete proposal', clinic.ok);
+  check('the clinic also produces a complete proposal', clinic.ok, why(clinic));
   if (clinic.ok) {
     check('does not re-sell booking the clinic already runs',
       !clinic.result.opportunities.some((o) => o.template_key === 'ai_receptionist'));

@@ -500,6 +500,12 @@ async function testDashboard() {
 /* ------------------------------------------------------------------ */
 
 async function main() {
+  // The daily run audits its demo leads, and runAudit() goes to Claude
+  // whenever ANTHROPIC_API_KEY is set - which turned this suite into a live,
+  // paid run on any machine with a key in .env.local, and produced zero drafts
+  // when the call failed. Pinned, like the pipeline and e2e suites.
+  if (process.env.TEST_LIVE_MODEL !== '1') process.env.REASONING_PROVIDER = 'heuristic';
+
   await rm(DATA_FILE, { force: true });
   console.log('Outreach engine end-to-end (50 demo leads, offline, dry-run sending)');
 

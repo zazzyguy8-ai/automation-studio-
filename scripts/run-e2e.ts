@@ -6,6 +6,12 @@
  * blueprint -> credential + step gating -> go-live -> dashboard rollup.
  *
  *   npm run test:e2e
+ *
+ * Offline by default, and enforced rather than assumed: getProvider() reaches
+ * for Claude whenever ANTHROPIC_API_KEY is set, which turned this into a live,
+ * paid, non-deterministic run on any machine with a key in .env.local. Set
+ * TEST_LIVE_MODEL=1 to exercise the real model instead - it costs money and
+ * can fail on model variation, which is why it is opt-in.
  */
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -294,8 +300,14 @@ async function runCase(c: Case) {
 
 async function main() {
   await rm(join(process.cwd(), '.data', 'e2e.json'), { force: true });
+
+  const live = process.env.TEST_LIVE_MODEL === '1';
+  if (!live) process.env.REASONING_PROVIDER = 'heuristic';
+
   console.log(`Automation Studio — end-to-end run`);
-  console.log(`reasoning provider: ${process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'heuristic (no ANTHROPIC_API_KEY set)'}`);
+  console.log(live
+    ? 'reasoning provider: anthropic (LIVE MODE - this costs money)'
+    : 'reasoning provider: heuristic (pinned - set TEST_LIVE_MODEL=1 to use the real model)');
 
   const summaries: Array<{ company: string; recommendation: string; template: string }> = [];
   for (const c of CASES) {
