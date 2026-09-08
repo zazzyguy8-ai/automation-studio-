@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { ZodError } from 'zod';
 import { AuditResultSchema, type AuditResult, type Lead } from '@/lib/types';
 import { AUDIT_SYSTEM, COPY_SYSTEM, auditUserPrompt, siteDigest } from './prompts';
 import { DEFAULT_AUDIT_MODEL, DEFAULT_COPY_MODEL, requireModel } from './models';
@@ -137,12 +138,102 @@ const DEMO_TOOL: Anthropic.Tool = {
   },
 };
 
+/**
+ * Output budgets, sized against what each tool is actually asked to produce.
+ *
+ * The audit is the expensive one and was the source of a real bug: at 8000 it
+ * sat right on the edge. The schema demands 3-5 opportunities, each with at
+ * least four workflow steps and three scored dimensions, plus up to six
+ * problems carrying verbatim evidence quotes. A content-heavy site pushed that
+ * past the ceiling, generation stopped mid-tool-input, and what came back was
+ * a tool_use block with an empty `input`.
+ */
+const MAX_TOKENS = {
+  /** Roughly double what a rich audit measures at, so a wordy site has room. */
+  audit: 16000,
+  /** One short message. */
+  copy: 1500,
+  /** A 60-120 second script. */
+  demo: 2500,
+} as const;
+
+/**
+ * Pulls the arguments out of a forced tool call, refusing anything that is not
+ * a complete set.
+ *
+ * The checks here exist because of how this failed in practice. A response cut
+ * off by `max_tokens` still contains a tool_use block - the block is just
+ * empty or half-written. Returning it unchecked handed zod an empty object,
+ * which reported every required field as missing. That error described the
+ * symptom (no business_profile, no problems, no opportunities...) and hid the
+ * cause, which was only ever that the output budget was too small.
+ */
 function toolResult<T>(message: Anthropic.Message, toolName: string): T {
+  if (message.stop_reason === 'max_tokens') {
+    throw new Error(
+      `${toolName} was cut off: generation hit max_tokens after ${message.usage.output_tokens} `
+      + 'output tokens, before the tool input was complete. This is an output budget problem, '
+      + 'not a model or schema problem - raise max_tokens for this call.',
+    );
+  }
+
+  // Claude may decline; the response is a 200 with no tool call, so it has to
+  // be read from stop_reason rather than caught as an error.
+  if (message.stop_reason === 'refusal') {
+    const details = (message as { stop_details?: { category?: string | null } }).stop_details;
+    const category = details?.category ?? null;
+    throw new Error(
+      `${toolName} was refused by the model${category ? ` (${category})` : ''}. `
+      + 'Nothing was produced; the audit cannot be built from this response.',
+    );
+  }
+
   const block = message.content.find(
     (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === toolName,
   );
   if (!block) throw new Error(`model did not call ${toolName} (stop_reason=${message.stop_reason})`);
-  return block.input as T;
+
+  const input = block.input;
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error(`${toolName} returned ${Array.isArray(input) ? 'an array' : typeof input}, not an object.`);
+  }
+  if (Object.keys(input).length === 0) {
+    throw new Error(
+      `${toolName} was called with no arguments (stop_reason=${message.stop_reason}, `
+      + `${message.usage.output_tokens} output tokens). The tool call is empty, so there is `
+      + 'nothing to validate.',
+    );
+  }
+
+  return input as T;
+}
+
+/**
+ * Validates tool arguments against the zod contract, reporting failures by
+ * field path rather than as a raw ZodError dump.
+ *
+ * A caller reading "business_profile: Required" needs to know whether the
+ * model returned the wrong shape or returned nothing at all - the two have
+ * completely different fixes, and the raw error distinguishes them only if you
+ * already know what to look for.
+ */
+function parseToolResult<T>(schema: { parse: (v: unknown) => T }, value: unknown, toolName: string): T {
+  try {
+    return schema.parse(value);
+  } catch (err) {
+    if (!(err instanceof ZodError)) throw err;
+    const present = value && typeof value === 'object' ? Object.keys(value as object) : [];
+    const faults = err.issues
+      .slice(0, 8)
+      .map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('\n');
+    const more = err.issues.length > 8 ? `\n  ... and ${err.issues.length - 8} more` : '';
+    throw new Error(
+      `${toolName} returned arguments that do not satisfy the contract.\n`
+      + `Top-level keys received: ${present.length ? present.join(', ') : '(none)'}\n`
+      + `${faults}${more}`,
+    );
+  }
 }
 
 export interface AnthropicProviderOptions {
@@ -172,7 +263,7 @@ export class AnthropicProvider implements ReasoningProvider {
   async analyzeBusiness({ lead, snapshot }: AuditInput): Promise<AuditResult> {
     const message = await this.client.messages.create({
       model: this.auditModel,
-      max_tokens: 8000,
+      max_tokens: MAX_TOKENS.audit,
       system: AUDIT_SYSTEM,
       tools: [AUDIT_TOOL],
       tool_choice: { type: 'tool', name: 'submit_audit' },
@@ -181,7 +272,7 @@ export class AnthropicProvider implements ReasoningProvider {
         content: auditUserPrompt(lead.company_name, lead.website, lead.industry, lead.country, siteDigest(snapshot)),
       }],
     });
-    return AuditResultSchema.parse(toolResult<AuditResult>(message, 'submit_audit'));
+    return parseToolResult(AuditResultSchema, toolResult(message, 'submit_audit'), 'submit_audit');
   }
 
   async writeOutreach({ lead, audit, demo, channel, step, sender }: CopyInput): Promise<CopyOutput> {
@@ -193,7 +284,7 @@ export class AnthropicProvider implements ReasoningProvider {
 
     const message = await this.client.messages.create({
       model: this.copyModel,
-      max_tokens: 1500,
+      max_tokens: MAX_TOKENS.copy,
       system: COPY_SYSTEM,
       tools: [COPY_TOOL],
       tool_choice: { type: 'tool', name: 'submit_message' },
@@ -224,7 +315,7 @@ Sender: ${sender.name}, ${sender.company}. Booking link: ${sender.calendar_url}`
     const winner = audit.opportunities.find((o) => o.id === audit.recommended_opportunity_id);
     const message = await this.client.messages.create({
       model: this.copyModel,
-      max_tokens: 2500,
+      max_tokens: MAX_TOKENS.demo,
       system: `You script 60-120 second screen-recorded demos for a one-person AI automation agency.
 The viewer is the business owner. The demo shows THEIR workflow, using THEIR service names and THEIR wording.
 Never state a number as a measurement of their business. Estimates must be spoken as estimates.

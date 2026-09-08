@@ -17,7 +17,7 @@ import { AnthropicProvider } from '@/lib/llm/anthropic';
 import { gateAudit } from '@/lib/audit/gate';
 import { crawlSite } from '@/lib/scrape/crawl';
 import { fixtureFetcher } from '@/lib/scrape/fixture-fetcher';
-import { AuditResultSchema, type Snapshot } from '@/lib/types';
+import { AuditResultSchema, type Lead, type Snapshot } from '@/lib/types';
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = '') => {
@@ -96,6 +96,32 @@ function auditFor(snapshot: Snapshot) {
   };
 }
 
+
+/** Replies with an arbitrary stop_reason and tool input, so the truncated and
+ *  refused responses can be exercised - shapes the well-formed stub above
+ *  cannot produce. */
+function rawTransport(opts: { stopReason: string; input?: unknown; outputTokens?: number; content?: unknown[] }) {
+  return (async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? '{}'));
+    return new Response(JSON.stringify({
+      id: 'msg_stub', type: 'message', role: 'assistant', model: body.model,
+      stop_reason: opts.stopReason, stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: opts.outputTokens ?? 8000 },
+      content: opts.content ?? [{ type: 'tool_use', id: 'tu', name: 'submit_audit', input: opts.input ?? {} }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as unknown as typeof fetch;
+}
+
+async function auditError(fetchImpl: typeof fetch, lead: Lead, snapshot: Snapshot): Promise<string> {
+  const provider = new AnthropicProvider({ apiKey: 'test-key-not-real', fetch: fetchImpl });
+  try {
+    await provider.analyzeBusiness({ lead, snapshot });
+    return '';
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
 async function main() {
   console.log('Claude wiring test (stub transport, no key, no network)\n');
 
@@ -160,6 +186,78 @@ async function main() {
     rejected = true;
   }
   check('a generic/short Claude response is rejected before storage', rejected);
+
+  /* --- regression: a truncated response must not look like a bad schema -- */
+  //
+  // The reported failure: running the novak-reality fixture produced a zod
+  // error saying business_profile, problems, opportunities,
+  // recommended_opportunity_id and recommendation_rationale were all missing.
+  // Nothing was wrong with the schema or the prompt. Generation had hit
+  // max_tokens partway through writing the tool input, and the empty tool_use
+  // block went straight to zod, which could only report "everything is
+  // missing". These cover both halves: the audit must be big enough not to
+  // truncate, and a truncated response must say so.
+  const nova = await crawlSite('https://novakreality.cz', {
+    fetcher: fixtureFetcher('novak-reality', 'https://novakreality.cz'),
+  });
+  const novaSnapshot: Snapshot = { ...nova, id: 'snap-nova', lead_id: 'lead-nova' };
+  const novaLead: Lead = {
+    ...lead, id: 'lead-nova', company_name: 'Novák Reality',
+    website: 'https://novakreality.cz', industry: 'real estate agency', country: 'CZ',
+  };
+
+  const novaOk = stubTransport(() => auditFor(novaSnapshot));
+  const novaProvider = new AnthropicProvider({ apiKey: 'test-key-not-real', fetch: novaOk.impl });
+  const novaResult = await novaProvider.analyzeBusiness({ lead: novaLead, snapshot: novaSnapshot });
+
+  check('novak-reality: a valid Claude response produces the required object',
+    AuditResultSchema.safeParse(novaResult).success);
+  for (const field of [
+    'business_profile', 'problems', 'opportunities',
+    'recommended_opportunity_id', 'recommendation_rationale',
+  ] as const) {
+    check(`novak-reality: ${field} is present`, novaResult[field] !== undefined);
+  }
+  check('novak-reality: the recommendation points at a real opportunity',
+    novaResult.opportunities.some((o) => o.id === novaResult.recommended_opportunity_id));
+
+  // The budget is what actually prevents the truncation; assert it on the wire
+  // rather than trusting the constant.
+  const novaReq = novaOk.seen[0];
+  check('the audit asks for enough output tokens to finish',
+    Number(novaReq.max_tokens) >= 16000, String(novaReq.max_tokens));
+
+  const cutOff = await auditError(
+    rawTransport({ stopReason: 'max_tokens', input: {} }), novaLead, novaSnapshot);
+  check('a truncated response is reported as a budget problem',
+    /max_tokens/.test(cutOff) && /cut off/.test(cutOff), cutOff);
+  check('a truncated response is NOT reported as missing fields',
+    !/business_profile/.test(cutOff), cutOff);
+
+  const halfWritten = await auditError(
+    rawTransport({ stopReason: 'max_tokens', input: { business_profile: { what_they_do: 'A' } } }),
+    novaLead, novaSnapshot);
+  check('a half-written tool input is caught as truncation too',
+    /cut off/.test(halfWritten), halfWritten);
+
+  const empty = await auditError(
+    rawTransport({ stopReason: 'tool_use', input: {} }), novaLead, novaSnapshot);
+  check('an empty tool call is named as empty, not as a schema failure',
+    /no arguments/.test(empty), empty);
+
+  const refused = await auditError(
+    rawTransport({ stopReason: 'refusal', content: [] }), novaLead, novaSnapshot);
+  check('a refusal is reported as a refusal', /refused/.test(refused), refused);
+
+  // A genuinely wrong shape must still fail - but now legibly, naming the
+  // paths and what actually arrived.
+  const wrongShape = await auditError(
+    rawTransport({ stopReason: 'tool_use', input: { business_profile: 'not an object', problems: [] } }),
+    novaLead, novaSnapshot);
+  check('a real contract violation names the failing paths',
+    /business_profile/.test(wrongShape) && /do not satisfy the contract/.test(wrongShape), wrongShape);
+  check('a real contract violation lists what did arrive',
+    /Top-level keys received/.test(wrongShape), wrongShape);
 
   /* --- demo + outreach calls ------------------------------------------- */
   const demoStub = stubTransport(() => ({
