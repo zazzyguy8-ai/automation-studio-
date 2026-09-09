@@ -9,6 +9,9 @@
  * dry-run send adapter, so it never touches the network and never emails
  * anyone.
  */
+import {
+  MAX_PER_DAY, OnboardingAnswersSchema, campaignFromAnswers, projectMonthly,
+} from '@/lib/engine/onboarding';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -499,6 +502,91 @@ async function testDashboard() {
 
 /* ------------------------------------------------------------------ */
 
+
+/* ------------------------------------------------------------------ */
+/* 10 — onboarding: questionnaire -> campaign                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The questionnaire is the only part of the product a user fills in, so the
+ * derivation from it has to be predictable and has to be visible when it
+ * overrides them.
+ */
+function testOnboarding() {
+  section('10. Onboarding: questionnaire -> campaign');
+
+  const base = {
+    what_you_do: 'I build booking systems for small clinics',
+    what_you_offer: 'A booking system wired into their existing calendar, built in two weeks',
+    target_industry: 'dental clinic',
+    country: 'gb',
+    cities: ['Manchester', 'Leeds', 'Bristol'],
+    ticket: 'high' as const,
+    build_fee_eur: 4000,
+    monthly_fee_eur: 800,
+    leads_per_day: 200,
+    mode: 'email' as const,
+  };
+
+  const parsed = OnboardingAnswersSchema.safeParse(base);
+  check('a complete questionnaire validates', parsed.success);
+
+  const derived = campaignFromAnswers(base);
+  check('country is normalised to upper case', derived.campaign.country === 'GB', derived.campaign.country);
+  check('the first city becomes the campaign city', derived.campaign.city === 'Manchester', String(derived.campaign.city));
+  check('the remaining cities are kept as further runs', derived.extra_cities.length === 2, String(derived.extra_cities));
+  check('fees carry through', derived.campaign.build_fee_eur === 4000 && derived.campaign.monthly_fee_eur === 800);
+
+  // The cap is the point: 200/day at a EUR 4,000 deal size buys 200 shallow
+  // emails, which is the failure this product exists to avoid.
+  check('a high-ticket offer is capped', derived.campaign.daily_target === MAX_PER_DAY.high, String(derived.campaign.daily_target));
+  check('the cap is explained, not applied silently',
+    derived.adjustments.some((a) => /reduced from 200 to 12/.test(a)), derived.adjustments.join(' | '));
+  check('drafting is a subset of discovery',
+    derived.campaign.daily_send_cap < derived.campaign.daily_target
+    && derived.campaign.daily_send_cap >= 1,
+    `${derived.campaign.daily_send_cap}/${derived.campaign.daily_target}`);
+
+  // A request inside the ceiling must pass through untouched.
+  const modest = campaignFromAnswers({ ...base, leads_per_day: 8 });
+  check('a request within the ceiling is left alone', modest.campaign.daily_target === 8);
+  check('and is not reported as an adjustment',
+    !modest.adjustments.some((a) => /reduced/.test(a)));
+
+  // Low ticket gets more room, because volume is what works there.
+  const low = campaignFromAnswers({ ...base, ticket: 'low', leads_per_day: 200 });
+  check('a low-ticket offer gets a higher ceiling',
+    low.campaign.daily_target === MAX_PER_DAY.low && low.campaign.daily_target > derived.campaign.daily_target,
+    String(low.campaign.daily_target));
+
+  for (const mode of ['contacts_only', 'research_only'] as const) {
+    const m = campaignFromAnswers({ ...base, mode });
+    check(`mode "${mode}" is stated back to the user`,
+      m.adjustments.some((a) => /nothing will be analysed|write the message yourself/.test(a)),
+      m.adjustments.join(' | '));
+  }
+
+  const projection = projectMonthly(derived);
+  check('the monthly figure is a range, not a number',
+    projection.discovered[1] > projection.discovered[0]);
+  check('the projection is labelled an estimate', projection.is_estimate === true);
+  check('the projection shows its assumptions', projection.assumptions.length >= 3);
+  check('the projection never promises sends',
+    projection.assumptions.some((a) => /your approval|yours to decide/.test(a)),
+    projection.assumptions.join(' | '));
+
+  // Empty or nonsense answers must fail loudly rather than produce a campaign
+  // that quietly searches for nothing.
+  check('an empty questionnaire is refused',
+    !OnboardingAnswersSchema.safeParse({}).success);
+  check('a one-word description is refused',
+    !OnboardingAnswersSchema.safeParse({ ...base, what_you_do: 'stuff' }).success);
+  check('a campaign with no city is refused',
+    !OnboardingAnswersSchema.safeParse({ ...base, cities: [] }).success);
+  check('a bad country code is refused',
+    !OnboardingAnswersSchema.safeParse({ ...base, country: 'GBR' }).success);
+}
+
 async function main() {
   // The daily run audits its demo leads, and runAudit() goes to Claude
   // whenever ANTHROPIC_API_KEY is set - which turned this suite into a live,
@@ -519,6 +607,7 @@ async function main() {
   const sent = await testFollowUps();
   await testReplies(sent);
   await testDashboard();
+  testOnboarding();
 
   console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);
   await rm(DATA_FILE, { force: true });
