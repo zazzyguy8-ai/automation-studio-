@@ -38,7 +38,8 @@ async function daily() {
       city: arg('--city') ?? 'Manchester',
       daily_target: Number(arg('--target') ?? 50),
       daily_send_cap: Number(arg('--cap') ?? 12),
-      build_fee_eur: 1500, monthly_fee_eur: 300, status: 'active',
+      build_fee_eur: 1500, monthly_fee_eur: 300,
+      outreach_mode: 'email', status: 'active',
     });
     console.log(`Created campaign "${created.name}".`);
     campaigns = [created];

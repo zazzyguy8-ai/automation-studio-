@@ -266,6 +266,9 @@ export class PgStore implements Store {
       country: String(r.country), city: (r.city as string) ?? null,
       daily_target: num(r.daily_target), daily_send_cap: num(r.daily_send_cap),
       build_fee_eur: num(r.build_fee_eur), monthly_fee_eur: num(r.monthly_fee_eur),
+      // Rows written before the column existed read as null; 'email' is what
+      // they behaved as, so that is what they keep behaving as.
+      outreach_mode: (r.outreach_mode as Campaign['outreach_mode']) ?? 'email',
       status: r.status as Campaign['status'], created_at: iso(r.created_at),
     };
   }
@@ -273,10 +276,10 @@ export class PgStore implements Store {
   async insertCampaign(c: Omit<Campaign, 'id' | 'created_at'>) {
     const { rows } = await this.pool.query(
       `insert into campaigns (name, industry, country, city, daily_target, daily_send_cap,
-                              build_fee_eur, monthly_fee_eur, status)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+                              build_fee_eur, monthly_fee_eur, outreach_mode, status)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
       [c.name, c.industry, c.country, c.city, c.daily_target, c.daily_send_cap,
-        c.build_fee_eur, c.monthly_fee_eur, c.status]);
+        c.build_fee_eur, c.monthly_fee_eur, c.outreach_mode, c.status]);
     return PgStore.campaign(rows[0]);
   }
 

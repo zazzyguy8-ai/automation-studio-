@@ -409,6 +409,19 @@ export const CampaignSchema = z.object({
   daily_target: z.number(),
   /** How many of those to actually draft outreach for. */
   daily_send_cap: z.number(),
+  /**
+   * How far down the pipeline this campaign is allowed to go.
+   *
+   * 'contacts_only' stops after discovery - a list of verified companies and
+   * public contact details, nothing read and nothing written. 'research_only'
+   * adds the audit, so the user gets the problem worth selling against and
+   * writes the message themselves. 'email' is the full pipeline, still gated
+   * on approval before anything sends.
+   *
+   * Defaulted rather than required so campaigns created before this existed
+   * keep parsing, and keep the behaviour they already had.
+   */
+  outreach_mode: z.enum(['contacts_only', 'research_only', 'email']).default('email'),
   build_fee_eur: z.number(),
   monthly_fee_eur: z.number(),
   status: z.enum(['active', 'paused']),

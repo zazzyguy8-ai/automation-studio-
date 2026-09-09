@@ -52,7 +52,7 @@ const siteFetcher = demoSiteFetcher(COMPANIES);
 const AT = (isoDay: string, hour: number) => new Date(`${isoDay}T${String(hour).padStart(2, '0')}:00:00Z`);
 const DAY1 = '2026-03-02';
 
-async function makeCampaign(): Promise<Campaign> {
+async function makeCampaign(mode: Campaign['outreach_mode'] = 'email'): Promise<Campaign> {
   const store = await getStore();
   return store.insertCampaign({
     name: 'Manchester car repair',
@@ -63,6 +63,7 @@ async function makeCampaign(): Promise<Campaign> {
     daily_send_cap: 12,
     build_fee_eur: 1500,
     monthly_fee_eur: 300,
+    outreach_mode: mode,
     status: 'active',
   });
 }
@@ -587,6 +588,59 @@ function testOnboarding() {
     !OnboardingAnswersSchema.safeParse({ ...base, country: 'GBR' }).success);
 }
 
+
+/* ------------------------------------------------------------------ */
+/* 12 — outreach modes change what the run actually does               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The settings screen offers three modes. Until this, only one of them was
+ * real: the questionnaire told the user that "contacts only" would skip the
+ * analysis, and then the engine audited every lead anyway.
+ *
+ * These checks are about work NOT done. Asserting that contacts_only produces
+ * no drafts would pass even if it had paid for every audit first, so what is
+ * asserted is the audit count - the expensive part, and the reason somebody
+ * picks that mode.
+ */
+async function testOutreachModes() {
+  section('12. Outreach modes change what the run does');
+
+  const contacts = await makeCampaign('contacts_only');
+  const c = await runDailyCampaign(contacts, { searchFetch, siteFetcher });
+  check('contacts_only still finds companies', c.discovered > 0, String(c.discovered));
+  check('contacts_only still saves the leads', c.saved_leads > 0, String(c.saved_leads));
+  check('contacts_only pays for NO audits', c.audited === 0, String(c.audited));
+  check('contacts_only writes nothing', c.selected.length === 0, String(c.selected.length));
+  check('contacts_only says where it stopped',
+    /discovery/.test(c.stopped_after), c.stopped_after);
+
+  const research = await makeCampaign('research_only');
+  const r = await runDailyCampaign(research, { searchFetch, siteFetcher });
+  check('research_only audits, which is what was asked for', r.audited > 0, String(r.audited));
+  check('research_only still ranks and selects leads', r.selected.length > 0, String(r.selected.length));
+  check('research_only writes no messages',
+    r.selected.every((sel) => sel.drafts.length === 0),
+    String(r.selected.reduce((n, sel) => n + sel.drafts.length, 0)));
+  check('research_only hands the writing back to the user',
+    /yours to write/.test(r.stopped_after), r.stopped_after);
+
+  const full = await makeCampaign('email');
+  const e = await runDailyCampaign(full, { searchFetch, siteFetcher });
+  check('email mode audits', e.audited > 0, String(e.audited));
+  check('email mode drafts', e.selected.some((sel) => sel.drafts.length > 0));
+  check('email mode still sends nothing by itself',
+    e.selected.every((sel) => sel.drafts.every((d) => d.status === 'draft')));
+  check('email mode says the drafts are waiting on approval',
+    /approval inbox/.test(e.stopped_after), e.stopped_after);
+
+  // The mode is a property of the campaign, so a later run cannot forget it.
+  const store = await getStore();
+  const reloaded = await store.getCampaign(contacts.id);
+  check('the mode is persisted on the campaign',
+    reloaded?.outreach_mode === 'contacts_only', String(reloaded?.outreach_mode));
+}
+
 async function main() {
   // The daily run audits its demo leads, and runAudit() goes to Claude
   // whenever ANTHROPIC_API_KEY is set - which turned this suite into a live,
@@ -608,6 +662,7 @@ async function main() {
   await testReplies(sent);
   await testDashboard();
   testOnboarding();
+  await testOutreachModes();
 
   console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);
   await rm(DATA_FILE, { force: true });

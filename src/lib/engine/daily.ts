@@ -38,6 +38,10 @@ export interface SelectedLead {
 
 export interface DailyRunResult {
   campaign: Campaign;
+  /** Echoed so a caller reading the result knows why it stopped where it did. */
+  mode: Campaign['outreach_mode'];
+  /** Plain-language account of where this run stopped, and why. */
+  stopped_after: string;
   discovered: number;
   saved_leads: number;
   audited: number;
@@ -97,6 +101,27 @@ export async function runDailyCampaign(
   const candidates = discovery.results.filter((r) => r.lead && r.ready_for_audit);
   const maxAudits = opts.maxAudits ?? campaign.daily_target;
 
+  // 'contacts_only' stops here. Nothing is read and nothing is written, so the
+  // run costs a search and nothing else - which is the entire reason to pick
+  // it. Returning early rather than filtering later matters: a mode that still
+  // paid for the audits would be a lie told in the settings screen.
+  if (campaign.outreach_mode === 'contacts_only') {
+    const saved = discovery.results.filter((r) => r.lead).map((r) => r.lead!);
+    return {
+      campaign,
+      mode: campaign.outreach_mode,
+      stopped_after: 'discovery — companies and verified contacts only, nothing analysed or written',
+      discovered: discovery.summary.found,
+      saved_leads: saved.length,
+      audited: 0,
+      audit_rejected: 0,
+      selected: [],
+      dropped,
+      market_requires_ack: market.outreach_risk === 'high',
+      market_note: market.outreach_note,
+    };
+  }
+
   const audited: SelectedLead[] = [];
   let auditRejected = 0;
 
@@ -149,7 +174,12 @@ export async function runDailyCampaign(
   audited.sort((a, b) => b.score - a.score);
   const selected = audited.slice(0, campaign.daily_send_cap);
 
-  for (const entry of selected) {
+  // 'research_only' keeps the audit - that is what the user asked for - and
+  // writes nothing. Every entry keeps its empty drafts array, so the caller
+  // sees the problem worth selling against and no message.
+  const willDraft = campaign.outreach_mode === 'email';
+
+  for (const entry of willDraft ? selected : []) {
     const audit = await store.latestAudit(entry.lead.id);
     if (!audit || audit.status !== 'ok') continue;
 
@@ -174,6 +204,10 @@ export async function runDailyCampaign(
 
   return {
     campaign,
+    mode: campaign.outreach_mode,
+    stopped_after: willDraft
+      ? 'drafting — every message is waiting in the approval inbox'
+      : 'research — you have the problem worth selling against; the message is yours to write',
     discovered: discovery.summary.found,
     saved_leads: discovery.summary.saved,
     audited: audited.length,

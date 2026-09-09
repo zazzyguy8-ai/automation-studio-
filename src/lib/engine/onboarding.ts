@@ -142,6 +142,7 @@ export function campaignFromAnswers(answers: OnboardingAnswers): DerivedCampaign
       daily_send_cap: draftCap,
       build_fee_eur: answers.build_fee_eur,
       monthly_fee_eur: answers.monthly_fee_eur,
+      outreach_mode: answers.mode,
       status: 'active',
     },
     extra_cities: extra,

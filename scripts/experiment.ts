@@ -113,6 +113,7 @@ async function ensureCampaigns(): Promise<Campaign[]> {
       daily_send_cap: perCity,
       build_fee_eur: icp.offer.build_gbp[0],
       monthly_fee_eur: icp.offer.monthly_gbp[0],
+      outreach_mode: 'email',
       status: 'active',
     }));
   }
