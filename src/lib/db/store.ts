@@ -1,6 +1,6 @@
 import type {
-  Agent, Audit, Campaign, Client, Demo, EngineState, Execution, Lead, LeadStage,
-  OutreachMessage, Reply, Snapshot, Suppression,
+  Account, Agent, Audit, Campaign, Client, Demo, EngineState, Execution, Lead, LeadStage,
+  OutreachMessage, Reply, Snapshot, Suppression, Usage,
 } from '@/lib/types';
 
 /** Engine-only fields default when a caller does not set them, so the older
@@ -77,6 +77,25 @@ export interface Store {
   insertExecution(e: Omit<Execution, 'id'>): Promise<Execution>;
   listExecutions(agentId: string, limit?: number): Promise<Execution[]>;
   listExecutionsForClient(clientId: string): Promise<Execution[]>;
+
+  /* --- accounts and usage ---------------------------------------------
+   * These sit ABOVE the account boundary: they are the registry the boundary
+   * is drawn from, so they take an explicit account id where the scoped
+   * methods take none.
+   */
+  listAccounts(): Promise<Account[]>;
+  getAccount(id: string): Promise<Account | null>;
+  findAccountByEmail(email: string): Promise<Account | null>;
+  findAccountByStripeCustomer(customerId: string): Promise<Account | null>;
+  insertAccount(a: Omit<Account, 'id' | 'created_at'>): Promise<Account>;
+  updateAccount(id: string, patch: Partial<Omit<Account, 'id' | 'created_at'>>): Promise<Account>;
+  getUsage(accountId: string, period: string): Promise<Usage>;
+  addUsage(
+    accountId: string,
+    period: string,
+    delta: Partial<Pick<Usage, 'audits' | 'leads_discovered' | 'messages_sent'>>,
+  ): Promise<Usage>;
+
 }
 
 export function newId(): string {

@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type {
   Agent, Audit, Campaign, Client, Demo, EngineState, Execution, Lead, LeadStage,
-  OutreachMessage, Reply, Snapshot, Suppression,
+  Account, OutreachMessage, Reply, Snapshot, Suppression, Usage,
 } from '@/lib/types';
 import { type LeadFilter, type NewOutreachMessage, type Store, newId, nowIso } from './store';
 
@@ -22,6 +22,11 @@ const DEFAULT_ENGINE_STATE: EngineState = {
   updated_at: nowIso(),
 };
 
+/**
+ * One account's data. Every method on the store reaches its rows through
+ * `this.db`, which resolves to exactly one of these, so an account boundary
+ * cannot be forgotten at a call site - there is no call site that names it.
+ */
 interface Db {
   leads: Lead[];
   snapshots: Snapshot[];
@@ -43,30 +48,156 @@ const EMPTY: Db = {
   campaigns: [], replies: [], suppressions: [], engine: null,
 };
 
+/** The whole file: a registry of accounts, and one Db per account. */
+interface File {
+  accounts: Account[];
+  usage: Usage[];
+  tenants: Record<string, Db>;
+}
+
+const EMPTY_FILE: File = { accounts: [], usage: [], tenants: {} };
+
+/**
+ * The account a store is scoped to when none is named.
+ *
+ * This is what makes the change non-breaking: a single-tenant install, and
+ * every existing script and test, keeps working against one account without
+ * knowing accounts exist.
+ */
+export const DEFAULT_ACCOUNT_ID = 'default';
+
+/**
+ * Reads whatever shape is on disk.
+ *
+ * Files written before accounts existed are flat - `{ leads: [...] }` with no
+ * `tenants` key. Those are lifted into the default account rather than
+ * discarded: somebody's working data is not an acceptable casualty of a schema
+ * change.
+ */
+function readFileShape(raw: unknown): File {
+  const obj = (raw ?? {}) as Record<string, unknown>;
+  if (obj.tenants) {
+    return {
+      accounts: (obj.accounts as Account[]) ?? [],
+      usage: (obj.usage as Usage[]) ?? [],
+      tenants: obj.tenants as Record<string, Db>,
+    };
+  }
+  const legacy = { ...structuredClone(EMPTY), ...(obj as Partial<Db>) };
+  const hasData = Object.values(legacy).some((v) => Array.isArray(v) && v.length > 0);
+  return {
+    accounts: [],
+    usage: [],
+    tenants: hasData ? { [DEFAULT_ACCOUNT_ID]: legacy } : {},
+  };
+}
+
 /** Zero-dependency store so the whole pipeline runs before any Postgres exists.
  *  Same interface as the Postgres driver, so switching is a one-line env change. */
 export class FileStore implements Store {
   private path: string;
-  private db: Db = structuredClone(EMPTY);
+  private accountId: string;
+  private file: File = structuredClone(EMPTY_FILE);
   private loaded = false;
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(path = process.env.DATA_FILE ?? join(process.cwd(), '.data', 'studio.json')) {
+  constructor(
+    path = process.env.DATA_FILE ?? join(process.cwd(), '.data', 'studio.json'),
+    accountId: string = DEFAULT_ACCOUNT_ID,
+  ) {
     this.path = path;
+    this.accountId = accountId;
+  }
+
+  /**
+   * This account's rows, created on first use.
+   *
+   * Every data method reads and writes through here, which is the entire
+   * account boundary. Nothing below this getter knows another account exists,
+   * so nothing below it can read one.
+   */
+  private get db(): Db {
+    let tenant = this.file.tenants[this.accountId];
+    if (!tenant) {
+      tenant = structuredClone(EMPTY);
+      this.file.tenants[this.accountId] = tenant;
+    }
+    return tenant;
   }
 
   async init(): Promise<void> {
     if (this.loaded) return;
     try {
-      this.db = { ...structuredClone(EMPTY), ...JSON.parse(await readFile(this.path, 'utf8')) };
+      this.file = readFileShape(JSON.parse(await readFile(this.path, 'utf8')));
     } catch {
-      this.db = structuredClone(EMPTY);
+      this.file = structuredClone(EMPTY_FILE);
     }
     this.loaded = true;
   }
 
+  /* --- account registry (not scoped: this is the layer above tenants) --- */
+
+  async listAccounts(): Promise<Account[]> {
+    await this.init();
+    return [...this.file.accounts];
+  }
+
+  async getAccount(id: string): Promise<Account | null> {
+    await this.init();
+    return this.file.accounts.find((a) => a.id === id) ?? null;
+  }
+
+  async findAccountByEmail(email: string): Promise<Account | null> {
+    await this.init();
+    const wanted = email.trim().toLowerCase();
+    return this.file.accounts.find((a) => a.email.toLowerCase() === wanted) ?? null;
+  }
+
+  async findAccountByStripeCustomer(customerId: string): Promise<Account | null> {
+    await this.init();
+    return this.file.accounts.find((a) => a.stripe_customer_id === customerId) ?? null;
+  }
+
+  async insertAccount(a: Omit<Account, 'id' | 'created_at'>): Promise<Account> {
+    await this.init();
+    const account: Account = { ...a, id: newId(), created_at: nowIso() };
+    this.file.accounts.push(account);
+    await this.flush();
+    return account;
+  }
+
+  async updateAccount(id: string, patch: Partial<Omit<Account, 'id' | 'created_at'>>): Promise<Account> {
+    await this.init();
+    const account = this.file.accounts.find((a) => a.id === id);
+    if (!account) throw new Error(`no account ${id}`);
+    Object.assign(account, patch);
+    await this.flush();
+    return account;
+  }
+
+  async getUsage(accountId: string, period: string): Promise<Usage> {
+    await this.init();
+    return this.file.usage.find((u) => u.account_id === accountId && u.period === period)
+      ?? { account_id: accountId, period, audits: 0, leads_discovered: 0, messages_sent: 0, updated_at: nowIso() };
+  }
+
+  async addUsage(accountId: string, period: string, delta: Partial<Pick<Usage, 'audits' | 'leads_discovered' | 'messages_sent'>>): Promise<Usage> {
+    await this.init();
+    let row = this.file.usage.find((u) => u.account_id === accountId && u.period === period);
+    if (!row) {
+      row = { account_id: accountId, period, audits: 0, leads_discovered: 0, messages_sent: 0, updated_at: nowIso() };
+      this.file.usage.push(row);
+    }
+    row.audits += delta.audits ?? 0;
+    row.leads_discovered += delta.leads_discovered ?? 0;
+    row.messages_sent += delta.messages_sent ?? 0;
+    row.updated_at = nowIso();
+    await this.flush();
+    return row;
+  }
+
   private async flush(): Promise<void> {
-    const snapshot = JSON.stringify(this.db, null, 2);
+    const snapshot = JSON.stringify(this.file, null, 2);
     this.writeQueue = this.writeQueue.then(async () => {
       await mkdir(dirname(this.path), { recursive: true });
       await writeFile(this.path, snapshot);

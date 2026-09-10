@@ -453,3 +453,47 @@ export const EngineStateSchema = z.object({
   updated_at: z.string(),
 });
 export type EngineState = z.infer<typeof EngineStateSchema>;
+
+/* ------------------------------------------------------------------ */
+/* Accounts and billing                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A tenant. Every row in the store belongs to exactly one of these, and the
+ * store is constructed against one - see getStore(accountId). The boundary is
+ * structural rather than a parameter on each query, because a boundary that
+ * depends on 41 call sites remembering it is not a boundary.
+ */
+export const AccountSchema = z.object({
+  id: z.string(),
+  /** Display name; the business, not the person. */
+  name: z.string(),
+  /** Login identity. Unique across accounts. */
+  email: z.string().email(),
+  plan: z.enum(['trial', 'starter', 'growth', 'agency']),
+  subscription_state: z.enum(['trialing', 'active', 'past_due', 'canceled']),
+  /** Set once Stripe knows about them. Null on a trial that never paid. */
+  stripe_customer_id: z.string().nullable(),
+  stripe_subscription_id: z.string().nullable(),
+  /** When the current period ends, so a cancellation can run out its term. */
+  current_period_end: z.string().nullable(),
+  created_at: z.string(),
+});
+export type Account = z.infer<typeof AccountSchema>;
+
+/**
+ * Audits consumed in a calendar month, which is the metered resource.
+ *
+ * Counted rather than derived from the audits table so the number survives
+ * data being pruned, and so a usage check is one read rather than a scan.
+ */
+export const UsageSchema = z.object({
+  account_id: z.string(),
+  /** "2026-09". */
+  period: z.string(),
+  audits: z.number(),
+  leads_discovered: z.number(),
+  messages_sent: z.number(),
+  updated_at: z.string(),
+});
+export type Usage = z.infer<typeof UsageSchema>;

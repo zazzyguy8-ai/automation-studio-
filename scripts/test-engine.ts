@@ -10,6 +10,10 @@
  * anyone.
  */
 import {
+  billingConfigProblems, handleWebhook, planForPrice, sellablePlans, stripeConfigured,
+} from '@/lib/billing/stripe';
+import { PLANS, canRun, stateFromStripe } from '@/lib/billing/plans';
+import {
   MAX_PER_DAY, OnboardingAnswersSchema, campaignFromAnswers, projectMonthly,
 } from '@/lib/engine/onboarding';
 import { rm } from 'node:fs/promises';
@@ -641,6 +645,215 @@ async function testOutreachModes() {
     reloaded?.outreach_mode === 'contacts_only', String(reloaded?.outreach_mode));
 }
 
+
+/* ------------------------------------------------------------------ */
+/* 13 — the account boundary                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The one property that matters for a multi-tenant product: an account cannot
+ * read another account's rows.
+ *
+ * Written as a leak test rather than a feature test. Checking that account B
+ * can save a lead proves nothing about isolation; what is checked here is that
+ * every list, lookup and count on B is blind to A's data, and the other way
+ * round.
+ */
+async function testAccountBoundary() {
+  section('13. The account boundary');
+
+  const a = await getStore('acct-a');
+  const b = await getStore('acct-b');
+
+  check('two accounts get two different stores', a !== b);
+
+  const leadA = await a.upsertLead({
+    company_name: 'Alpha Ltd', website: 'https://alpha.example', industry: null, country: 'GB',
+    size_hint: null, stage: 'new', contacts: [{ kind: 'email', value: 'hi@alpha.example', label: 'found_on_site' }],
+    socials: [], notes: null, source: 'test',
+  });
+  const leadB = await b.upsertLead({
+    company_name: 'Beta Ltd', website: 'https://beta.example', industry: null, country: 'GB',
+    size_hint: null, stage: 'new', contacts: [{ kind: 'email', value: 'hi@beta.example', label: 'found_on_site' }],
+    socials: [], notes: null, source: 'test',
+  });
+
+  const aLeads = await a.listLeads();
+  const bLeads = await b.listLeads();
+  check('A sees only its own lead', aLeads.length === 1 && aLeads[0].company_name === 'Alpha Ltd',
+    aLeads.map((l) => l.company_name).join(','));
+  check('B sees only its own lead', bLeads.length === 1 && bLeads[0].company_name === 'Beta Ltd',
+    bLeads.map((l) => l.company_name).join(','));
+
+  // A direct lookup by id is the sharpest test: B has the id, and must still
+  // get nothing back.
+  check('B cannot fetch A\'s lead by id', (await b.getLead(leadA.id)) === null);
+  check('A cannot fetch B\'s lead by id', (await a.getLead(leadB.id)) === null);
+  check('B cannot find A\'s lead by website',
+    (await b.findLeadByWebsite('https://alpha.example')) === null);
+
+  // The same website in two accounts must be two separate leads, not a
+  // collision - two customers may well chase the same company.
+  const alsoAlpha = await b.upsertLead({
+    company_name: 'Alpha Ltd', website: 'https://alpha.example', industry: null, country: 'GB',
+    size_hint: null, stage: 'new', contacts: [], socials: [], notes: null, source: 'test',
+  });
+  check('the same company in two accounts is two rows', alsoAlpha.id !== leadA.id);
+  check('and A is unaffected by B saving it', (await a.listLeads()).length === 1);
+
+  // Suppression is per account: one customer's opt-out is not another's.
+  await a.addSuppression({ value: 'stop@alpha.example', scope: 'address', reason: 'manual', note: null });
+  check('A has its suppression', (await a.isSuppressed('stop@alpha.example')) !== null);
+  check('B does not inherit it', (await b.isSuppressed('stop@alpha.example')) === null);
+
+  // Engine state - the kill switch - is per account too. One account stopping
+  // must not stop everybody.
+  await a.updateEngineState({ kill_switch: true, kill_switch_reason: 'A stopped' });
+  check('A is stopped', (await a.getEngineState()).kill_switch === true);
+  check('B keeps running', (await b.getEngineState()).kill_switch === false);
+}
+
+/* ------------------------------------------------------------------ */
+/* 14 — plans and entitlements                                         */
+/* ------------------------------------------------------------------ */
+
+async function testPlansAndUsage() {
+  section('14. Plans and usage');
+
+  const store = await getStore();
+  const account = await store.insertAccount({
+    name: 'Test Co', email: 'owner@test.example', plan: 'starter',
+    subscription_state: 'active', stripe_customer_id: null,
+    stripe_subscription_id: null, current_period_end: null,
+  });
+  check('an account can be created', account.id.length > 0);
+  check('it is found by email',
+    (await store.findAccountByEmail('OWNER@TEST.EXAMPLE'))?.id === account.id);
+
+  // Every plan has to cover its own running cost, and the audit ceiling is
+  // what that rests on - so a paid plan must never allow more audits per euro
+  // than the one above it.
+  const paid = (['starter', 'growth', 'agency'] as const).map((k) => PLANS[k]);
+  const perEuro = paid.map((p) => p.audits_per_month / (p.price_eur_month / 100));
+  check('the trial is the only free plan', PLANS.trial.price_eur_month === 0);
+  check('every paid plan costs money', paid.every((p) => p.price_eur_month > 0));
+  check('audit ceilings rise with price',
+    paid.every((p, i) => i === 0 || p.audits_per_month > paid[i - 1].audits_per_month),
+    paid.map((p) => p.audits_per_month).join(' < '));
+  check('no plan is a better deal per euro than the tier above it',
+    perEuro.every((v, i) => i === 0 || v >= perEuro[i - 1]),
+    perEuro.map((v) => v.toFixed(1)).join(' / '));
+
+  // Usage is what the ceiling is measured against.
+  const period = '2026-09';
+  await store.addUsage(account.id, period, { audits: 3 });
+  await store.addUsage(account.id, period, { audits: 2, messages_sent: 5 });
+  const usage = await store.getUsage(account.id, period);
+  check('usage accumulates rather than overwriting', usage.audits === 5, String(usage.audits));
+  check('separate counters do not bleed into each other',
+    usage.messages_sent === 5 && usage.leads_discovered === 0);
+  check('an unused period reads as zero',
+    (await store.getUsage(account.id, '2026-10')).audits === 0);
+
+  // Subscription state decides whether we spend money on their behalf.
+  check('a trialing account runs', canRun('trialing'));
+  check('an active account runs', canRun('active'));
+  check('past_due still runs - a Friday card expiry is not a reason to stop them', canRun('past_due'));
+  check('a cancelled account does not run', !canRun('canceled'));
+
+  // Anything Stripe reports has to land somewhere, and unknown means stop.
+  check('stripe "active" maps to active', stateFromStripe('active') === 'active');
+  check('stripe "unpaid" maps to past_due', stateFromStripe('unpaid') === 'past_due');
+  check('stripe "incomplete_expired" maps to canceled', stateFromStripe('incomplete_expired') === 'canceled');
+  check('an unrecognised stripe status fails closed',
+    stateFromStripe('something_stripe_adds_in_2027') === 'canceled');
+}
+
+
+/* ------------------------------------------------------------------ */
+/* 15 — billing configuration and webhook trust                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The webhook is the only thing allowed to upgrade an account, so the checks
+ * here are about what it REFUSES.
+ *
+ * An endpoint that skipped signature verification would let anyone who found
+ * the URL post themselves onto the agency plan for free. Verification itself
+ * belongs to the Stripe SDK; what is tested is that we never reach it without
+ * a secret and a signature, and that we never treat an unverified payload as
+ * a fact.
+ */
+async function testBilling() {
+  section('15. Billing configuration and webhook trust');
+
+  const saved = {
+    key: process.env.STRIPE_SECRET_KEY,
+    hook: process.env.STRIPE_WEBHOOK_SECRET,
+    app: process.env.APP_URL,
+  };
+
+  try {
+    delete process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_WEBHOOK_SECRET;
+    delete process.env.APP_URL;
+
+    check('an unconfigured install reports it rather than half-working',
+      billingConfigProblems().length > 0);
+    check('the missing webhook secret is called out as a trust problem',
+      billingConfigProblems().some((p) => /webhooks cannot be verified/.test(p)),
+      billingConfigProblems().join(' | '));
+    check('stripeConfigured() is false without a key', !stripeConfigured());
+
+    // No secret: the payload cannot be verified, so it must not be applied -
+    // not even a well-formed one.
+    let refused = '';
+    try {
+      await handleWebhook(JSON.stringify({ type: 'customer.subscription.updated' }), 'sig');
+    } catch (err) {
+      refused = err instanceof Error ? err.message : String(err);
+    }
+    check('a webhook with no configured secret is refused',
+      /refusing to trust/.test(refused), refused);
+
+    process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_not_real';
+    let noSig = '';
+    try {
+      await handleWebhook(JSON.stringify({ type: 'customer.subscription.updated' }), null);
+    } catch (err) {
+      noSig = err instanceof Error ? err.message : String(err);
+    }
+    check('a webhook with no signature header is refused',
+      /No stripe-signature header/.test(noSig), noSig);
+
+    // A forged body with a made-up signature must not get through either.
+    process.env.STRIPE_SECRET_KEY = 'sk_test_not_real';
+    let forged = '';
+    try {
+      await handleWebhook(
+        JSON.stringify({ type: 'customer.subscription.updated', data: { object: { id: 'sub_x' } } }),
+        't=1,v1=deadbeef',
+      );
+    } catch (err) {
+      forged = err instanceof Error ? err.message : String(err);
+    }
+    check('a forged signature is rejected', forged.length > 0, forged.slice(0, 90));
+
+    // Nothing we sell should be advertised without a price behind it.
+    check('a plan with no configured price is not sellable',
+      sellablePlans().every((p) => p.price_configured === false));
+    check('planForPrice returns null for a price we do not sell',
+      planForPrice('price_someone_elses') === null);
+  } finally {
+    delete process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_WEBHOOK_SECRET;
+    delete process.env.APP_URL;
+    if (saved.key) process.env.STRIPE_SECRET_KEY = saved.key;
+    if (saved.hook) process.env.STRIPE_WEBHOOK_SECRET = saved.hook;
+    if (saved.app) process.env.APP_URL = saved.app;
+  }
+}
+
 async function main() {
   // The daily run audits its demo leads, and runAudit() goes to Claude
   // whenever ANTHROPIC_API_KEY is set - which turned this suite into a live,
@@ -663,6 +876,9 @@ async function main() {
   await testDashboard();
   testOnboarding();
   await testOutreachModes();
+  await testAccountBoundary();
+  await testPlansAndUsage();
+  await testBilling();
 
   console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);
   await rm(DATA_FILE, { force: true });

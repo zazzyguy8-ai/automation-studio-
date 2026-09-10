@@ -2,20 +2,45 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 import type {
-  Agent, Audit, Campaign, Client, Demo, EngineState, Execution, Lead, LeadStage,
-  OutreachMessage, Reply, Snapshot, Suppression,
+  Account, Agent, Audit, Campaign, Client, Demo, EngineState, Execution, Lead, LeadStage,
+  OutreachMessage, Reply, Snapshot, Suppression, Usage,
 } from '@/lib/types';
-import type { LeadFilter, NewOutreachMessage, Store } from './store';
+import { DEFAULT_ACCOUNT_ID } from './file-store';
+import { type LeadFilter, type NewOutreachMessage, type Store, nowIso } from './store';
 
 const num = (v: unknown): number => (v === null || v === undefined ? 0 : Number(v));
 const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
 
 export class PgStore implements Store {
+  /**
+   * The account this store is scoped to.
+   *
+   * Only the default account is accepted, and the constructor refuses anything
+   * else. The account registry below is scoped correctly, but the forty-odd
+   * data methods on this class are not - they were written single-tenant and
+   * still query without an account_id. Implementing the registry while leaving
+   * those unscoped would produce a store that LOOKS multi-tenant and silently
+   * serves one customer another customer's leads.
+   *
+   * So it fails loudly instead. A refused connection is a bug report; a
+   * successful one that leaks data is a breach. Scoping these queries is the
+   * next change, and until it lands Postgres stays single-tenant.
+   */
+  private accountId: string;
+
   private pool: Pool;
   private ready = false;
 
-  constructor(connectionString = process.env.DATABASE_URL) {
+  constructor(connectionString = process.env.DATABASE_URL, accountId = DEFAULT_ACCOUNT_ID) {
     if (!connectionString) throw new Error('DATABASE_URL is required for PgStore');
+    if (accountId !== DEFAULT_ACCOUNT_ID) {
+      throw new Error(
+        `PgStore cannot serve account "${accountId}": its data queries are not yet scoped by `
+        + 'account, so returning rows would mean returning another account\'s data. Run on the '
+        + 'file store for multi-account work, or scope the Postgres queries first.',
+      );
+    }
+    this.accountId = accountId;
     this.pool = new Pool({
       connectionString,
       ssl: connectionString.includes('localhost') ? undefined : { rejectUnauthorized: false },
@@ -518,5 +543,96 @@ export class PgStore implements Store {
     const { rows } = await this.pool.query(
       `select e.* from executions e join agents a on a.id = e.agent_id where a.client_id = $1`, [clientId]);
     return rows.map(PgStore.execution);
+  }
+
+  /* --- accounts and usage --------------------------------------------- */
+
+  private static account(r: Record<string, unknown>): Account {
+    return {
+      id: String(r.id), name: String(r.name), email: String(r.email),
+      plan: r.plan as Account['plan'],
+      subscription_state: r.subscription_state as Account['subscription_state'],
+      stripe_customer_id: (r.stripe_customer_id as string) ?? null,
+      stripe_subscription_id: (r.stripe_subscription_id as string) ?? null,
+      current_period_end: r.current_period_end ? iso(r.current_period_end) : null,
+      created_at: iso(r.created_at),
+    };
+  }
+
+  async listAccounts(): Promise<Account[]> {
+    const { rows } = await this.pool.query('select * from accounts order by created_at');
+    return rows.map(PgStore.account);
+  }
+
+  async getAccount(id: string): Promise<Account | null> {
+    const { rows } = await this.pool.query('select * from accounts where id = $1', [id]);
+    return rows[0] ? PgStore.account(rows[0]) : null;
+  }
+
+  async findAccountByEmail(email: string): Promise<Account | null> {
+    const { rows } = await this.pool.query('select * from accounts where lower(email) = lower($1)', [email.trim()]);
+    return rows[0] ? PgStore.account(rows[0]) : null;
+  }
+
+  async findAccountByStripeCustomer(customerId: string): Promise<Account | null> {
+    const { rows } = await this.pool.query('select * from accounts where stripe_customer_id = $1', [customerId]);
+    return rows[0] ? PgStore.account(rows[0]) : null;
+  }
+
+  async insertAccount(a: Omit<Account, 'id' | 'created_at'>): Promise<Account> {
+    const { rows } = await this.pool.query(
+      `insert into accounts (name, email, plan, subscription_state, stripe_customer_id,
+                             stripe_subscription_id, current_period_end)
+       values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+      [a.name, a.email, a.plan, a.subscription_state, a.stripe_customer_id,
+        a.stripe_subscription_id, a.current_period_end]);
+    return PgStore.account(rows[0]);
+  }
+
+  async updateAccount(id: string, patch: Partial<Omit<Account, 'id' | 'created_at'>>): Promise<Account> {
+    const keys = Object.keys(patch);
+    if (keys.length === 0) {
+      const current = await this.getAccount(id);
+      if (!current) throw new Error(`no account ${id}`);
+      return current;
+    }
+    const sets = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
+    const { rows } = await this.pool.query(
+      `update accounts set ${sets} where id = $1 returning *`,
+      [id, ...keys.map((k) => (patch as Record<string, unknown>)[k])]);
+    if (!rows[0]) throw new Error(`no account ${id}`);
+    return PgStore.account(rows[0]);
+  }
+
+  async getUsage(accountId: string, period: string): Promise<Usage> {
+    const { rows } = await this.pool.query(
+      'select * from usage where account_id = $1 and period = $2', [accountId, period]);
+    if (!rows[0]) {
+      return { account_id: accountId, period, audits: 0, leads_discovered: 0, messages_sent: 0, updated_at: nowIso() };
+    }
+    const r = rows[0];
+    return {
+      account_id: String(r.account_id), period: String(r.period),
+      audits: num(r.audits), leads_discovered: num(r.leads_discovered),
+      messages_sent: num(r.messages_sent), updated_at: iso(r.updated_at),
+    };
+  }
+
+  async addUsage(
+    accountId: string,
+    period: string,
+    delta: Partial<Pick<Usage, 'audits' | 'leads_discovered' | 'messages_sent'>>,
+  ): Promise<Usage> {
+    // Upsert so two concurrent runs cannot both insert the period row.
+    await this.pool.query(
+      `insert into usage (account_id, period, audits, leads_discovered, messages_sent)
+       values ($1,$2,$3,$4,$5)
+       on conflict (account_id, period) do update set
+         audits = usage.audits + excluded.audits,
+         leads_discovered = usage.leads_discovered + excluded.leads_discovered,
+         messages_sent = usage.messages_sent + excluded.messages_sent,
+         updated_at = now()`,
+      [accountId, period, delta.audits ?? 0, delta.leads_discovered ?? 0, delta.messages_sent ?? 0]);
+    return this.getUsage(accountId, period);
   }
 }
