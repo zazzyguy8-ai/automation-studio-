@@ -12,7 +12,9 @@
     "listing": "tsx --env-file-if-exists=.env.local scripts/listing.ts",
     "test:listing": "tsx --env-file-if-exists=.env.local scripts/test-listing.ts",
     "test:quota": "tsx --env-file-if-exists=.env.local scripts/test-quota.ts",
-    "test": "npm run typecheck && npm run test:listing && npm run test:quota"
+    "test": "npm run typecheck && npm run test:listing && npm run test:quota",
+    "doctor": "tsx --env-file-if-exists=.env.local scripts/doctor.ts",
+    "setup:stripe": "tsx --env-file-if-exists=.env.local scripts/setup-stripe.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",
