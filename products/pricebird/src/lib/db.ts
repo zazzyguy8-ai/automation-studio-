@@ -98,7 +98,7 @@ export class FileStore implements Store {
   private path: string;
   private data: Snapshot = { accounts: [], listings: [], codes: [] };
 
-  constructor(path = process.env.SNAPLIST_DATA_FILE ?? join(process.cwd(), '.data', 'snaplist.json')) {
+  constructor(path = process.env.PRICEBIRD_DATA_FILE ?? join(process.cwd(), '.data', 'pricebird.json')) {
     this.path = path;
   }
 

@@ -16,7 +16,7 @@ import { getStore, type Account } from '@/lib/db';
  * for somebody else's account, and an HMAC settles that.
  */
 
-export const SESSION_COOKIE = 'sl_session';
+export const SESSION_COOKIE = 'pb_session';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 180; // 180 days
 const CODE_TTL_MS = 10 * 60 * 1000;
 const MAX_CODE_ATTEMPTS = 5;

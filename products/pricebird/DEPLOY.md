@@ -1,4 +1,4 @@
-# Deploying Snaplist
+# Deploying Pricebird
 
 Four accounts, about fifteen minutes, and one command that tells you whether it
 actually worked. Do them in this order — each step produces a value the next
@@ -9,18 +9,26 @@ behind it.
 
 ---
 
-## 0. Before anything: the name
+## 0. The domain is already yours
 
-Check the domain and run a trademark search for **Snaplist** in your market. If
-it is taken, decide now — a rename after fifty videos costs you the audience.
-Fallbacks that keep the meaning: Listsnap, Snapsell, Fliply.
+**pricebird.org**, registered 12 September 2026. Two things to do with it
+before the deploy:
+
+- Turn on auto-renew. A consumer app that lapses because a card expired is not
+  recoverable — someone else registers the name and your videos point at them.
+- Run a trademark search for "Pricebird" in your market. Owning the domain is
+  not owning the name, and the check is cheaper before the videos than after.
+
+If `pricebird.com` ever comes free, take it and redirect it here. A `.org` on a
+paid consumer app invites the occasional "is this a charity?" — not fatal, and
+not worth paying an aftermarket price to fix.
 
 ## 1. Database — Neon or Supabase (free tier is enough)
 
 Create a Postgres database and copy the connection string.
 
 ```bash
-cd products/snaplist
+cd products/pricebird
 cp .env.example .env.local
 # put DATABASE_URL=... in .env.local
 npm run db:push
@@ -55,7 +63,7 @@ The webhook comes after the deploy, because it needs the real URL.
 ## 4. Email — Resend
 
 Add your domain, add the DNS records it gives you, wait for verification. Then
-`RESEND_API_KEY` and `MAIL_FROM="Snaplist <hello@yourdomain.com>"`.
+`RESEND_API_KEY` and `MAIL_FROM="Pricebird <hello@yourdomain.com>"`.
 
 Without this, sign-in codes are refused in production and anyone who clears
 their cookies loses their account. It is not optional once you have customers.
@@ -70,7 +78,7 @@ echo "SESSION_SECRET=$(openssl rand -hex 32)" >> .env.local
 
 Import the GitHub repository, then — the one setting people miss:
 
-- **Root Directory: `products/snaplist`**
+- **Root Directory: `products/pricebird`**
 
 This repository holds two apps. Without that, Vercel builds the wrong one.
 

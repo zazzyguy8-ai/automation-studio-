@@ -11,7 +11,7 @@ import { PLANS } from '@/lib/billing/plans';
 const PROBLEMS = [
   {
     title: 'eBay cuts your title at 80 characters',
-    body: 'Usually mid-word, usually taking the size with it. Snaplist writes a title per marketplace and enforces each limit before you paste, so nothing gets chopped.',
+    body: 'Usually mid-word, usually taking the size with it. Pricebird writes a title per marketplace and enforces each limit before you paste, so nothing gets chopped.',
   },
   {
     title: 'The flaw you forgot becomes a refund',
@@ -53,17 +53,18 @@ export default function Home() {
           <div className="shell">
             <div className="grid-2" style={{ gap: 40, alignItems: 'center' }}>
               <div className="stack" style={{ gap: 22 }}>
-                <span className="pill pill-accent">5 free listings · no signup</span>
-                <h1>Photo in.<br /><span>Listing out.</span></h1>
+                <span className="pill pill-accent">5 free · no signup</span>
+                <h1>What&apos;s it worth?<br /><span>Ask the bird.</span></h1>
                 <p className="lede">
-                  Photograph what you are selling. Get the title, the description, the price range
-                  and the search keywords — written and sized for the marketplace you are listing on.
+                  Photograph anything you are selling. Pricebird reads the photo and gives you a
+                  price range — plus the title, the description and the search keywords, sized for
+                  whichever marketplace you list on.
                 </p>
                 <div className="row">
-                  <Link href="/app" className="btn btn-primary">Make a listing free</Link>
+                  <Link href="/app" className="btn btn-primary">Price something free</Link>
                   <Link href="/pricing" className="btn btn-ghost">See pricing</Link>
                 </div>
-                <p className="small faint">Takes about twenty seconds. No card, no email until you want one.</p>
+                <p className="small faint">About twenty seconds. No card, no email until you want one.</p>
               </div>
 
               <ExampleCard />
@@ -184,6 +185,15 @@ function ExampleCard() {
         <span className="pill pill-accent">from 1 photo</span>
       </div>
 
+      <div className="row" style={{ gap: 14, alignItems: 'flex-start' }}>
+        <div className="stack" style={{ gap: 2, flex: 1 }}>
+          <span className="out-label">Suggested price</span>
+          <div className="price-row">
+            <span className="price-big">£95</span>
+            <span className="price-range">£78 quick · £120 patient</span>
+          </div>
+        </div>
+      </div>
       <div className="out-field">
         <div className="out-head">
           <span className="out-label">Title · 74/80</span>
@@ -205,15 +215,6 @@ function ExampleCard() {
         </div>
       </div>
 
-      <div className="row" style={{ gap: 14, alignItems: 'flex-start' }}>
-        <div className="stack" style={{ gap: 2, flex: 1 }}>
-          <span className="out-label">Suggested price</span>
-          <div className="price-row">
-            <span className="price-big">£95</span>
-            <span className="price-range">£78 quick · £120 patient</span>
-          </div>
-        </div>
-      </div>
 
       <p className="note note-warn small">
         Size read off the label in photo 2. Chest measurement not visible — measure pit to pit

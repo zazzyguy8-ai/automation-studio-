@@ -233,7 +233,7 @@ function checkSecrets(): void {
 }
 
 async function main(): Promise<void> {
-  console.log('\nSnaplist preflight\n');
+  console.log('\nPricebird preflight\n');
 
   checkSecrets();
   await checkModel();

@@ -23,7 +23,7 @@ export async function POST(request: Request) {
   try {
     await sendMail({
       to: email,
-      subject: `${code} is your Snaplist code`,
+      subject: `${code} is your Pricebird code`,
       text: `Your sign-in code is ${code}.\n\nIt works for ten minutes. If you did not ask for it, ignore this email — nobody can get into your listings without it.`,
     });
   } catch (error) {

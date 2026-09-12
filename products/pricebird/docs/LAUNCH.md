@@ -1,4 +1,4 @@
-# Snaplist: the launch plan
+# Pricebird: the launch plan
 
 The product is built. This is everything else — the name, what it stands for,
 what it costs, and how the first hundred paying customers arrive without you
@@ -6,20 +6,31 @@ ever being on camera.
 
 ## 1. The name
 
-**Snaplist.** Snap a photo, get a listing. Two syllables, spells itself over
-audio, and the product is explained before anyone clicks.
+**Pricebird**, on **pricebird.org** — registered, paid, done.
 
-- Tagline: **Photo in. Listing out.**
-- Longer line, for app stores and bios: *Turn a phone photo into a marketplace
-  listing in twenty seconds.*
-- Handle to claim everywhere the same day: `snaplist`, then `snaplistapp` /
-  `getsnaplist` as the fallback pair. Take the same one on TikTok, Instagram,
+- Tagline: **Snap it. Price it. List it.**
+- The question the brand asks, and the one the audience already has:
+  *What's it worth?* The answer on the landing page is *Ask the bird.*
+- Handles to claim the same day: `pricebird`, then `pricebirdapp` /
+  `getpricebird` as the fallback pair. Take the same one on TikTok, Instagram,
   YouTube, X and Reddit even if you never post there.
 
-**Before you print anything:** check the .com and a trademark search in your
-market. "Snaplist" is an obvious enough construction that someone may hold it.
-If it is gone, the shortlist that keeps the meaning is *Listsnap*, *Snapsell*,
-*Fliply*. Do this on day one — a rename after fifty videos costs the audience.
+**The name changes the emphasis, so the product follows it.** "Snaplist"
+promised a listing and mentioned a price. "Pricebird" promises a valuation
+first, which is the question a seller actually asks out loud — *what is this
+worth?* — and the finished listing is the payoff after they get the number. The
+landing page, the app and the videos all lead with the price now.
+
+**The bird is doing real work.** You are marketing without showing your face,
+which normally means a brand with nothing to recognise. A mascot is the face
+that is not yours: in the app icon, in the corner of every screen recording, on
+the profile picture. Draw it once properly and it does that job for years.
+"Snaplist" could never have given you one.
+
+**Two housekeeping jobs.** Turn on auto-renew — a lapsed domain hands your
+videos to whoever registers it next. And run a trademark search: owning the
+domain is not owning the name, and it is cheaper to find out now than after
+fifty videos.
 
 ## 2. Who it is for
 

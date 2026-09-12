@@ -1,24 +1,25 @@
-# Snaplist
+# Pricebird
 
-**Photo in. Listing out.**
+**Snap it. Price it. List it.** — [pricebird.org](https://pricebird.org)
 
-Photograph the thing you are selling. Snaplist reads the photo and writes the
-title, the description, the price range and the search keywords — sized and
-worded for eBay, Vinted, Depop, Facebook Marketplace, Poshmark, Mercari or Etsy.
+Photograph anything you are selling. Pricebird reads the photo and gives back a
+price range plus the listing to go with it: title, description and search
+keywords, sized and worded for eBay, Vinted, Depop, Facebook Marketplace,
+Poshmark, Mercari or Etsy.
 
 It is a consumer micro-SaaS: five listings free with no signup, then $9 a month.
 
 ## 60 seconds to a running app
 
 ```bash
-cd products/snaplist
+cd products/pricebird
 npm install
 echo "SESSION_SECRET=$(openssl rand -hex 32)" > .env.local
 echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env.local
 npm run dev
 ```
 
-With no `DATABASE_URL` everything is written to `.data/snaplist.json`. That is
+With no `DATABASE_URL` everything is written to `.data/pricebird.json`. That is
 fine on a laptop and is not a production database.
 
 Check a prompt change against a real photo without clicking through the UI:
@@ -72,7 +73,7 @@ and adding one should require an argument.
    delivered and nobody can reach their account from a second device.
 4. **`SESSION_SECRET`.** 32+ characters. Without it the app refuses to start a
    session rather than signing cookies with something guessable.
-5. **Deploy.** Vercel, project root `products/snaplist`. `maxDuration` on the
+5. **Deploy.** Vercel, project root `products/pricebird`. `maxDuration` on the
    listing route is 60s because vision plus copy runs 10–25s.
 
 `npm run build` fails loudly on a missing `SESSION_SECRET`; the billing and

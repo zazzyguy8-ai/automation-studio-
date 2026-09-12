@@ -1,4 +1,4 @@
--- Snaplist schema. Idempotent: safe to run against a live database.
+-- Pricebird schema. Idempotent: safe to run against a live database.
 --
 -- Three tables and nothing else. There is no photos table on purpose - images
 -- are sent to the model and dropped, never written down.

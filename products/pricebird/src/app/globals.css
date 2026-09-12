@@ -1,5 +1,5 @@
 /*
- * Snaplist's design system.
+ * Pricebird's design system.
  *
  * Dark by commitment, not by preference. Every listing this makes gets
  * screen-recorded for a fifteen-second video, and a white SaaS dashboard on a
@@ -88,12 +88,11 @@ img { max-width: 100%; display: block; }
 .brand { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: -0.02em; font-size: 17px; }
 
 .brand-mark {
-  width: 26px; height: 26px;
-  border-radius: 8px;
   background: var(--accent);
   color: var(--accent-ink);
-  display: grid; place-items: center;
-  font-size: 14px; font-weight: 800;
+  display: grid;
+  place-items: center;
+  flex: none;
 }
 
 .nav-links { display: flex; align-items: center; gap: 20px; font-size: 14px; color: var(--text-dim); }

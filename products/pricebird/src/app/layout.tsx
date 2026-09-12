@@ -4,15 +4,15 @@ import './globals.css';
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.APP_URL ?? 'http://localhost:3000'),
   title: {
-    default: 'Snaplist — photo in, listing out',
-    template: '%s · Snaplist',
+    default: 'Pricebird — price it, then list it',
+    template: '%s · Pricebird',
   },
   description:
-    'Photograph the thing you are selling. Get the title, the description, the price range and the keywords, '
-    + 'written for eBay, Vinted, Depop, Facebook Marketplace, Poshmark, Mercari or Etsy.',
+    'Photograph anything you are selling. Get a price range and a finished listing - title, description '
+    + 'and keywords - for eBay, Vinted, Depop, Facebook Marketplace, Poshmark, Mercari or Etsy.',
   openGraph: {
-    title: 'Snaplist — photo in, listing out',
-    description: 'Turn a phone photo into a marketplace listing in about twenty seconds.',
+    title: 'Pricebird — price it, then list it',
+    description: 'Snap it. Price it. List it. A phone photo becomes a priced marketplace listing in about twenty seconds.',
     type: 'website',
   },
 };

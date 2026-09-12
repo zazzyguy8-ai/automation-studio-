@@ -28,16 +28,16 @@ const EVENTS: Stripe.WebhookEndpointCreateParams.EnabledEvent[] = [
 
 async function findOrCreateProduct(stripe: Stripe): Promise<Stripe.Product> {
   const existing = await stripe.products.list({ limit: 100, active: true });
-  const found = existing.data.find((p) => p.metadata?.app === 'snaplist');
+  const found = existing.data.find((p) => p.metadata?.app === 'pricebird');
   if (found) {
     console.log(`product   ${found.id} (existing)`);
     return found;
   }
 
   const created = await stripe.products.create({
-    name: 'Snaplist Pro',
+    name: 'Pricebird Pro',
     description: 'Unlimited marketplace listings from photos.',
-    metadata: { app: 'snaplist' },
+    metadata: { app: 'pricebird' },
   });
   console.log(`product   ${created.id} (created)`);
   return created;
@@ -85,7 +85,7 @@ async function setUpWebhook(stripe: Stripe, appUrl: string): Promise<string | nu
   const created = await stripe.webhookEndpoints.create({
     url,
     enabled_events: EVENTS,
-    description: 'Snaplist subscription state',
+    description: 'Pricebird subscription state',
   });
   console.log(`webhook   ${created.id} (created, pointing at ${url})`);
   return created.secret ?? null;

@@ -26,7 +26,7 @@ const LISTING = {
 } as Listing;
 
 async function main(): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), 'snaplist-'));
+  const dir = await mkdtemp(join(tmpdir(), 'pricebird-'));
   const store = new FileStore(join(dir, 'data.json'));
   await store.init();
 
