@@ -12,6 +12,8 @@ export interface AuditRequest {
   industry?: string | null;
   country?: string | null;
   source?: string;
+  /** From the account's plan; omitted uses the configured default. */
+  audit?: { model: string; effort: 'medium' | 'high' };
   /** Test hook: swap the network for fixtures. */
   fetcher?: Fetcher;
 }
@@ -60,7 +62,7 @@ export async function runAudit(req: AuditRequest): Promise<AuditRun> {
 
   let audit: Audit;
   try {
-    const result = await provider.analyzeBusiness({ lead, snapshot });
+    const result = await provider.analyzeBusiness({ lead, snapshot, audit: req.audit });
     // Sort by the same score the UI shows, so "the recommendation" is never
     // a different opportunity from the one at the top of the list.
     const ranked = rank(result.opportunities);

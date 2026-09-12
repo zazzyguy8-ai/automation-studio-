@@ -12,7 +12,8 @@
 import {
   billingConfigProblems, handleWebhook, planForPrice, sellablePlans, stripeConfigured,
 } from '@/lib/billing/stripe';
-import { PLANS, canRun, stateFromStripe } from '@/lib/billing/plans';
+import { MIN_MARGIN, PLANS, canRun, planHeadroom, stateFromStripe } from '@/lib/billing/plans';
+import { auditRequestFor, costPerAuditUsd, marginAtCeiling, maxAuditsForMargin } from '@/lib/billing/cost';
 import {
   MAX_PER_DAY, OnboardingAnswersSchema, campaignFromAnswers, projectMonthly,
 } from '@/lib/engine/onboarding';
@@ -730,19 +731,49 @@ async function testPlansAndUsage() {
   check('it is found by email',
     (await store.findAccountByEmail('OWNER@TEST.EXAMPLE'))?.id === account.id);
 
-  // Every plan has to cover its own running cost, and the audit ceiling is
-  // what that rests on - so a paid plan must never allow more audits per euro
-  // than the one above it.
+  // The check that was missing, and that let three loss-making plans ship: the
+  // margin against what a call ACTUALLY costs, not the tiers' consistency with
+  // each other. The first version of these plans passed a relative check while
+  // losing 52%, 94% and 140% respectively.
   const paid = (['starter', 'growth', 'agency'] as const).map((k) => PLANS[k]);
-  const perEuro = paid.map((p) => p.audits_per_month / (p.price_eur_month / 100));
   check('the trial is the only free plan', PLANS.trial.price_eur_month === 0);
   check('every paid plan costs money', paid.every((p) => p.price_eur_month > 0));
-  check('audit ceilings rise with price',
-    paid.every((p, i) => i === 0 || p.audits_per_month > paid[i - 1].audits_per_month),
-    paid.map((p) => p.audits_per_month).join(' < '));
-  check('no plan is a better deal per euro than the tier above it',
-    perEuro.every((v, i) => i === 0 || v >= perEuro[i - 1]),
-    perEuro.map((v) => v.toFixed(1)).join(' / '));
+
+  for (const plan of paid) {
+    const m = marginAtCeiling(plan.price_eur_month, plan.audits_per_month, plan.audit_call);
+    check(`${plan.name} clears the ${(MIN_MARGIN * 100).toFixed(0)}% floor at full use`,
+      m.margin >= MIN_MARGIN,
+      `${(m.margin * 100).toFixed(1)}% — $${m.revenue_usd} in, $${m.total_cost_usd} out`);
+    check(`${plan.name} makes money rather than costing it`, m.profit_usd > 0, `$${m.profit_usd}`);
+  }
+
+  // Measured at the ceiling, not at average use: a plan that only works while
+  // customers underuse it breaks the day one of them does not.
+  check('the floor is measured at the ceiling, so a heavy user is still profitable',
+    paid.every((p) => planHeadroom(p).spare >= 0),
+    paid.map((p) => `${p.name} ${planHeadroom(p).using}/${planHeadroom(p).ceiling}`).join(', '));
+
+  // The model is the cost driver, so it has to be a real audit call and the
+  // engine has to be able to act on it.
+  for (const plan of Object.values(PLANS)) {
+    const req = auditRequestFor(plan.audit_call);
+    check(`${plan.name} names a model the engine can run`,
+      req.model.startsWith('claude-'), `${plan.audit_call} -> ${req.model} @ ${req.effort}`);
+  }
+  check('the cheapest plan does not buy the most expensive model',
+    PLANS.starter.audit_call !== 'audit_high');
+
+  // Cost ordering must hold, or a "cheaper" call would quietly be dearer.
+  check('a Sonnet audit costs less than an Opus one',
+    costPerAuditUsd('audit_sonnet') < costPerAuditUsd('audit_medium'),
+    `$${costPerAuditUsd('audit_sonnet').toFixed(3)} < $${costPerAuditUsd('audit_medium').toFixed(3)}`);
+  check('lower effort costs less than higher effort on the same model',
+    costPerAuditUsd('audit_medium') < costPerAuditUsd('audit_high'));
+
+  // A price that cannot carry a single audit must report zero rather than a
+  // negative ceiling that reads as "unlimited".
+  check('a price too small for one audit yields a ceiling of zero',
+    maxAuditsForMargin(100, 'audit_high') === 0, String(maxAuditsForMargin(100, 'audit_high')));
 
   // Usage is what the ceiling is measured against.
   const period = '2026-09';

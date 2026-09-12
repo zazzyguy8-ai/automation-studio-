@@ -1,4 +1,6 @@
 import { runAudit } from '@/lib/audit/run';
+import { auditRequestFor } from '@/lib/billing/cost';
+import type { Plan } from '@/lib/billing/plans';
 import { getStore } from '@/lib/db';
 import { buildDemo } from '@/lib/demo/build';
 import { runDiscovery, type DiscoveryOptions } from '@/lib/discovery/run';
@@ -25,6 +27,12 @@ export interface DailyRunOptions {
   provider?: DiscoveryOptions['provider'];
   /** Cap the audit work; auditing 50 sites with Claude is slow and not free. */
   maxAudits?: number;
+  /**
+   * The account's plan. It decides which model reads the sites, which is the
+   * difference between a 72% margin and a 52% loss. Omitted runs the default,
+   * which is what a single-tenant install does.
+   */
+  plan?: Plan;
 }
 
 export interface SelectedLead {
@@ -148,6 +156,7 @@ export async function runDailyCampaign(
       industry: campaign.industry,
       country: campaign.country,
       source: `campaign:${campaign.id}`,
+      audit: opts.plan ? auditRequestFor(opts.plan.audit_call) : undefined,
       fetcher: opts.siteFetcher,
     });
 

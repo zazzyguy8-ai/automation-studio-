@@ -307,14 +307,19 @@ export class AnthropicProvider implements ReasoningProvider {
     this.copyModel = requireModel('COPY_MODEL', DEFAULT_COPY_MODEL);
   }
 
-  async analyzeBusiness({ lead, snapshot }: AuditInput): Promise<AuditResult> {
+  async analyzeBusiness({ lead, snapshot, audit }: AuditInput): Promise<AuditResult> {
+    // The account's plan decides the model and the effort; without one, the
+    // configured default and the highest effort.
+    const model = audit?.model ?? this.auditModel;
+    const effort = audit?.effort ?? 'high';
+
     // Streamed, then collapsed back to a single message: nothing here consumes
     // partial output, so the stream exists only to satisfy the SDK's long
     // request rule. finalMessage() reassembles the tool input from the deltas.
     const message = await this.client.messages.stream({
-      model: this.auditModel,
+      model,
       max_tokens: MAX_TOKENS.audit,
-      ...reasoningParams(this.auditModel, 'high'),
+      ...reasoningParams(model, effort),
       system: AUDIT_SYSTEM,
       tools: [AUDIT_TOOL],
       tool_choice: { type: 'tool', name: 'submit_audit' },

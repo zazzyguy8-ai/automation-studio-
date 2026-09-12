@@ -3,6 +3,13 @@ import type { AuditResult, Demo, Lead, Snapshot } from '@/lib/types';
 export interface AuditInput {
   lead: Lead;
   snapshot: Snapshot;
+  /**
+   * Which model and how hard it thinks, chosen by the account's plan.
+   *
+   * Omitted falls back to the configured default, which is what every
+   * single-tenant caller - the CLI, the tests - still does.
+   */
+  audit?: { model: string; effort: 'medium' | 'high' };
 }
 
 export interface CopyInput {
