@@ -118,7 +118,14 @@ async function checkStripe(): Promise<void> {
   for (const [interval, env] of Object.entries(PRICE_ENV)) {
     const id = process.env[env];
     if (!id) {
-      record(`Price (${interval})`, false, `${env} is not set. Run: npm run setup:stripe`);
+      record(
+        `Price (${interval})`,
+        false,
+        interval === 'yearly'
+          ? `${env} is not set, so only the monthly plan is on sale. That is a fine way to launch.`
+          : `${env} is not set. Nothing can be sold. Run: npm run setup:stripe`,
+        interval === 'yearly' ? 'warning' : 'blocking',
+      );
       continue;
     }
     try {

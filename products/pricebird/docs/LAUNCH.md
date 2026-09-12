@@ -50,20 +50,31 @@ the free tier and never pay, and that is fine. They are the reach.
 |---|---|---|
 | Listings | 5, lifetime | 300/month fair use |
 | Marketplaces | all seven | all seven |
-| Price | $0 | **$9/month** or $79/year |
+| Price | $0 | **$7/month** (optional $69/year) |
 
 Lifetime free rather than monthly free is deliberate: a monthly allowance is a
 subscription nobody ever pays for. Five is enough to judge the output and not
 enough to run a shop on.
 
-The line that sells it: **one extra sale covers the year.**
+**$7, not $9.** The difference does not decide whether a reseller subscribes —
+what decides it is whether the fifth free listing was good. $7 is under the
+threshold where people stop to think, and it reads as obviously cheaper than
+one returned parcel.
 
-**Unit economics.** About two cents of inference per listing. A Pro user
-averaging 40 listings a month costs roughly $0.80 against $9. Even the outlier
-at the 300 cap costs $6 and still pays. The margin is not the risk — churn is.
+**What the card fees actually take.** Stripe takes roughly 2.9% + $0.30 per
+charge, so a $7 subscription nets about **$6.50** — the fixed 30 cents is 4% of
+the price on its own. That is the real cost of a low monthly price, and it is
+the argument for the annual plan: one $69 charge loses about $2.30 in fees,
+around 3%, against roughly 7% when the same money arrives in twelve pieces.
 
-**Break-even is trivial and that is the point.** At $9, a hundred and twelve
-subscribers is $1,000 MRR. That is a number one good content run reaches.
+**The margin is not the risk — churn is.** About two cents of inference per
+listing. A Pro user doing 40 listings a month costs roughly $0.80 against $6.50
+net. Even the outlier at the 300 cap costs $6, which is where a single user
+stops being profitable — that is what the cap is for.
+
+**143 subscribers is $1,000 MRR gross; 154 to net it after fees.** Call it 150
+people. That is the number one good content run reaches, which is why this
+price and not $29.
 
 ## 4. Design
 
@@ -196,7 +207,7 @@ copy.
 - **Seasonality.** Reselling peaks January and September. Launching outside
   those is slower, not fatal.
 - **Consumer churn is real.** Someone who clears a wardrobe cancels in month
-  two. Yearly at $79 is the answer; push it once they have made ten listings,
+  two. Yearly at $69 is the answer; push it once they have made ten listings,
   not on day one.
 - **Trust.** The three refusals — no invented sizes, no fake comps, no stored
   photos — are the differentiator, not fine print. Say them out loud in the

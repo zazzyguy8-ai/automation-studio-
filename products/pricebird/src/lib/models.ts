@@ -13,7 +13,7 @@ export type SupportedModel = (typeof SUPPORTED_MODELS)[number];
 /**
  * Reading a photo and writing 200 words of copy is not a reasoning problem,
  * it is a perception problem with a tight output. Sonnet sees as well as Opus
- * here and costs a fraction, which is what makes $9/month work at volume.
+ * here and costs a fraction, which is what makes $7/month work at volume.
  */
 export const DEFAULT_VISION_MODEL: SupportedModel = 'claude-sonnet-5';
 

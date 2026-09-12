@@ -12,8 +12,10 @@ import type { Plan } from '@/lib/db';
  *
  * The paid cap exists to bound the model bill, not to upsell. At roughly two
  * cents of inference per listing, 300 a month is about six dollars against a
- * nine dollar price - and nobody photographing items by hand reaches it. It
- * is a runaway-script guard.
+ * seven dollar price - which is the one number worth watching after the price
+ * came down from nine. Nobody photographing items by hand gets near 300; the
+ * cap is a runaway-script guard, and at this price it is also the line where
+ * a single user would stop being profitable.
  */
 export interface PlanSpec {
   key: Plan;
@@ -26,7 +28,7 @@ export interface PlanSpec {
 
 export const PLANS: Record<Plan, PlanSpec> = {
   free: { key: 'free', label: 'Free', limit: 5, window: 'lifetime', priceLabel: '$0' },
-  pro: { key: 'pro', label: 'Pro', limit: 300, window: 'month', priceLabel: '$9 / month' },
+  pro: { key: 'pro', label: 'Pro', limit: 300, window: 'month', priceLabel: '$7 / month' },
 };
 
 export type Interval = 'monthly' | 'yearly';

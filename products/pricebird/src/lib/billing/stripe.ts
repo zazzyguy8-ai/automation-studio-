@@ -27,8 +27,11 @@ export function billingConfigProblems(): string[] {
     );
   }
   if (!process.env.APP_URL) problems.push('APP_URL is not set - checkout has nowhere to return the customer to.');
-  for (const [interval, env] of Object.entries(PRICE_ENV)) {
-    if (!process.env[env]) problems.push(`${env} is not set - the ${interval} plan cannot be sold.`);
+  // Monthly is the product; yearly is an option a launch can open without.
+  // Blocking the whole checkout because the annual price has not been created
+  // yet would stop someone selling on day one for no reason.
+  if (!process.env[PRICE_ENV.monthly]) {
+    problems.push(`${PRICE_ENV.monthly} is not set - the monthly plan cannot be sold, which is the product.`);
   }
   return problems;
 }
@@ -54,7 +57,13 @@ function appUrl(): string {
  */
 export async function createCheckout(account: Account, interval: Interval): Promise<string> {
   const priceId = process.env[PRICE_ENV[interval]];
-  if (!priceId) throw new Error(`${PRICE_ENV[interval]} is not set.`);
+  if (!priceId) {
+    throw new Error(
+      interval === 'yearly'
+        ? 'The yearly plan is not on sale yet. Create the price in Stripe and set STRIPE_PRICE_YEARLY.'
+        : `${PRICE_ENV[interval]} is not set.`,
+    );
+  }
 
   const session = await client().checkout.sessions.create({
     mode: 'subscription',

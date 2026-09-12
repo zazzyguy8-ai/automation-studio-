@@ -4,7 +4,7 @@
  *
  * Idempotent by metadata: run it against test mode, run it again against live
  * mode, run it twice by accident - it finds what it already made instead of
- * creating a second $9 price. Duplicate prices are how a customer ends up
+ * creating a second $7 price. Duplicate prices are how a customer ends up
  * subscribed to an object nothing in the app references.
  *
  *   npm run setup:stripe                 # product + prices
@@ -12,8 +12,8 @@
  */
 import Stripe from 'stripe';
 
-const MONTHLY_CENTS = 900;
-const YEARLY_CENTS = 7900;
+const MONTHLY_CENTS = 700;
+const YEARLY_CENTS = 6900;
 const CURRENCY = 'usd';
 
 /** The events the app actually handles. Registering more means Stripe retries

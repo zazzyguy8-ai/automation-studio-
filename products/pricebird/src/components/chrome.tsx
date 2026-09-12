@@ -17,6 +17,9 @@ export function BirdMark({ size = 26 }: { size?: number }) {
   return (
     <span className="brand-mark" style={{ width: size, height: size, borderRadius: size / 3.2 }}>
       <svg viewBox="0 0 24 24" width={size * 0.72} height={size * 0.72} aria-hidden="true" focusable="false">
+        {/* crest: what makes it a jay rather than a generic bird, and what ties
+            the mark to the mascot used on social */}
+        <path d="M13.2 6.6 L12.4 2.2 L15.0 4.9 L16.6 1.6 L17.6 5.9 Z" fill="currentColor" />
         {/* forked tail: two feathers, so it does not read as a fin at 26px */}
         <path d="M8.4 12.4 L0.9 7.4 L3.4 12.6 L1.6 17.8 Z" fill="currentColor" />
         {/* body */}

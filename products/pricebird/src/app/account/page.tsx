@@ -71,7 +71,7 @@ export default async function AccountPage() {
               )}
               {account.plan === 'pro'
                 ? <PortalButton />
-                : <UpgradeButton interval="monthly">Go Pro — $9/month</UpgradeButton>}
+                : <UpgradeButton interval="monthly">Go Pro — $7/month</UpgradeButton>}
             </div>
 
             <div className="card stack" style={{ gap: 12 }}>
