@@ -1,0 +1,19 @@
+{
+  "name": "instagram-dm",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pomalé, ručne prihlásené odosielanie Instagram DM cez Playwright (browser automation).",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "login": "node src/login.js",
+    "send": "node src/send.js",
+    "send:dry": "node src/send.js --dry-run",
+    "check": "node src/validate-targets.js"
+  },
+  "dependencies": {
+    "playwright": "^1.55.0"
+  }
+}

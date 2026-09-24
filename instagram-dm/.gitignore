@@ -1,0 +1,5 @@
+node_modules
+auth/
+screenshots/
+sent.log
+targets.json
