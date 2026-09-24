@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Execution Vault — 150+ AI tools, prompts & workflows</title>
+  <meta name="description" content="A searchable vault of 150+ vetted AI tools, copy-ready business prompts and 5 end-to-end AI workflows for creators and operators. By Friedman Media.">
+  <meta name="theme-color" content="#09090b">
+  <meta property="og:title" content="AI Execution Vault">
+  <meta property="og:description" content="150+ vetted AI tools, copy-ready prompts and 5 end-to-end workflows. Stop collecting AI tips — start executing.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2309090b'/%3E%3Cpath d='M9 22 16 8l7 14' stroke='%23fafafa' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M12 17h8' stroke='%238b5cf6' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="nav">
+    <div class="nav__inner">
+      <a class="brand" href="#vault" aria-label="AI Execution Vault home">
+        <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M9 22 16 8l7 14"/><path class="brand__bar" d="M12 17h8"/></svg>
+        <span>AI Execution Vault</span>
+      </a>
+      <nav class="tabs" role="tablist" aria-label="Sections">
+        <button class="tab" role="tab" id="tab-vault" aria-controls="panel-vault" data-tab="vault">Vault</button>
+        <button class="tab" role="tab" id="tab-workflows" aria-controls="panel-workflows" data-tab="workflows">Workflows</button>
+        <button class="tab" role="tab" id="tab-roi" aria-controls="panel-roi" data-tab="roi">ROI</button>
+      </nav>
+      <a class="btn btn--primary btn--sm nav__cta" data-checkout href="#">Get access<span class="nav__price"> · $24.99</span></a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="hero__glow" aria-hidden="true"></div>
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>By Friedman Media · Updated 2026</p>
+      <h1>Stop collecting AI tips.<br><span class="grad">Start executing.</span></h1>
+      <p class="hero__sub">150+ vetted AI tools, copy-ready business prompts and 5 end-to-end workflows — searchable in one place, built for creators who ship.</p>
+      <div class="hero__actions">
+        <a class="btn btn--primary" data-checkout href="#">Unlock the Vault — $24.99</a>
+        <a class="btn btn--ghost" href="#roi" data-tab-link="roi">Calculate your ROI</a>
+      </div>
+      <dl class="stats">
+        <div><dt>Resources</dt><dd id="stat-total">150+</dd></div>
+        <div><dt>Prompts</dt><dd id="stat-prompts">90+</dd></div>
+        <div><dt>Workflows</dt><dd id="stat-workflows">5</dd></div>
+        <div><dt>Categories</dt><dd>5</dd></div>
+      </dl>
+    </section>
+
+    <!-- VAULT -->
+    <section class="panel" id="panel-vault" role="tabpanel" aria-labelledby="tab-vault">
+      <div class="toolbar">
+        <label class="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="q" type="search" placeholder="Search tools, prompts, use cases…" autocomplete="off" spellcheck="false" aria-label="Search the vault">
+          <kbd aria-hidden="true">/</kbd>
+        </label>
+        <div class="seg" role="group" aria-label="Type">
+          <button class="seg__btn" data-kind="all" aria-pressed="true">All</button>
+          <button class="seg__btn" data-kind="prompt" aria-pressed="false">Prompts</button>
+          <button class="seg__btn" data-kind="tool" aria-pressed="false">Tools</button>
+        </div>
+      </div>
+      <div class="chips" id="chips" role="group" aria-label="Category"></div>
+      <p class="meta" id="count" aria-live="polite"></p>
+      <div class="grid" id="grid"></div>
+      <div class="empty" id="empty" hidden>
+        <p>No matches for “<span id="empty-q"></span>”.</p>
+        <button class="btn btn--ghost btn--sm" id="reset">Clear filters</button>
+      </div>
+    </section>
+
+    <!-- WORKFLOWS -->
+    <section class="panel" id="panel-workflows" role="tabpanel" aria-labelledby="tab-workflows" hidden>
+      <header class="panel__head">
+        <h2>End-to-end AI workflows</h2>
+        <p>Five complete systems, step by step. Each one chains tools and prompts from the Vault into a result you can measure.</p>
+      </header>
+      <div class="wf">
+        <div class="wf__list" id="wf-list" role="list"></div>
+        <article class="wf__detail" id="wf-detail" aria-live="polite"></article>
+      </div>
+    </section>
+
+    <!-- ROI -->
+    <section class="panel" id="panel-roi" role="tabpanel" aria-labelledby="tab-roi" hidden>
+      <header class="panel__head">
+        <h2>What is AI worth to you?</h2>
+        <p>Move the sliders to match your week. Savings rates are conservative estimates for people using the prompts and workflows in the Vault.</p>
+      </header>
+      <div class="roi">
+        <form class="roi__inputs" id="roi-form" onsubmit="return false">
+          <div class="field">
+            <div class="field__row"><label for="rate">Your hourly value</label><output id="rate-out"></output></div>
+            <input type="range" id="rate" min="10" max="300" step="5" value="50">
+          </div>
+          <div class="roi__divider"><span>Hours per week spent on…</span></div>
+          <div id="roi-tasks"></div>
+          <div class="field">
+            <div class="field__row"><label for="tools">AI tool subscriptions / month</label><output id="tools-out"></output></div>
+            <input type="range" id="tools" min="0" max="300" step="5" value="40">
+          </div>
+        </form>
+        <aside class="roi__out" aria-live="polite">
+          <p class="roi__label">Hours saved per month</p>
+          <p class="roi__big" id="roi-hours">0</p>
+          <div class="roi__bar"><span id="roi-bar"></span></div>
+          <dl class="roi__kv">
+            <div><dt>Value of time saved</dt><dd id="roi-value">$0</dd></div>
+            <div><dt>Minus tool costs</dt><dd id="roi-cost">$0</dd></div>
+            <div class="roi__net"><dt>Net gain / month</dt><dd id="roi-net">$0</dd></div>
+            <div><dt>Net gain / year</dt><dd id="roi-year">$0</dd></div>
+            <div><dt>Vault pays for itself in</dt><dd id="roi-payback">—</dd></div>
+          </dl>
+          <a class="btn btn--primary btn--block" data-checkout href="#">Get the Vault — $24.99</a>
+          <p class="fine">Estimates, not guarantees. Actual savings depend on how consistently you apply the workflows.</p>
+        </aside>
+      </div>
+    </section>
+
+    <!-- PRICING -->
+    <section class="pricing" id="pricing">
+      <div class="price-card">
+        <div class="price-card__head">
+          <h2>AI Execution Vault</h2>
+          <p class="price"><span class="price__amt">$24.99</span><span class="price__note">one-time · lifetime updates</span></p>
+        </div>
+        <ul class="checks">
+          <li>150+ vetted AI tools across 5 categories</li>
+          <li>90+ copy-ready business prompts with fill-in brackets</li>
+          <li>5 end-to-end AI workflows, step by step</li>
+          <li>ROI calculator to prioritise what to automate</li>
+          <li>Instant search &amp; one-click copy on any device</li>
+        </ul>
+        <a class="btn btn--primary btn--block btn--lg" data-checkout href="#">Get instant access</a>
+        <p class="fine">Secure checkout by Whop. Access is delivered immediately after purchase.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>© <span id="year">2026</span> <a href="https://friedmannmedia.com" rel="noopener">Friedman Media</a>. Tool names are trademarks of their owners; the Vault is not affiliated with them.</p>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
