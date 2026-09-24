@@ -10,6 +10,9 @@ export const CONFIG = {
   storageStateFile: path.join(ROOT, 'auth', 'storageState.json'),
   screenshotsDir: path.join(ROOT, 'screenshots'),
 
+  // Sent to every target that has no "message" of its own in targets.json.
+  defaultMessage: 'hey i love your vids keep it up!',
+
   // Hard safety limits. The CLI can lower maxMessagesPerRun, never raise it.
   maxMessagesPerRun: 30,
   pauseBetweenMessagesMs: [90_000, 180_000],

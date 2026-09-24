@@ -1,4 +1,5 @@
 [
-  { "handle": "creator_handle", "message": "Ahoj! Páči sa mi tvoj obsah o ...\nMala by si záujem o spoluprácu?" },
-  { "handle": "@another_creator", "message": "text správy" }
+  "creator_handle",
+  "@another_creator",
+  { "handle": "third_creator", "message": "custom message just for this one" }
 ]

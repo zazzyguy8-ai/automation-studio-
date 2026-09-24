@@ -38,13 +38,20 @@ sa zastaví a stačí znova spustiť `npm run login`.
 cp targets.example.json targets.json
 ```
 
+Stačí zoznam handle-ov. Každý dostane predvolenú správu
+`hey i love your vids keep it up!` (zmeníš ju v `src/config.js`,
+položka `defaultMessage`):
+
 ```json
 [
-  { "handle": "creator_handle", "message": "text správy" }
+  "creator_handle",
+  "@another_creator",
+  { "handle": "third_creator", "message": "custom message just for this one" }
 ]
 ```
 
 - `handle` môže byť s `@` aj bez neho.
+- Objekt s `message` prepíše predvolenú správu len pre daný profil.
 - Nový riadok v správe zapíš ako `\n` (napíše sa cez Shift+Enter).
 - `npm run check` skontroluje súbor a povie, koľko cieľov ešte čaká.
 
